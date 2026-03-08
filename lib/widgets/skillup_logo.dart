@@ -22,7 +22,7 @@ class SkillUpLogo extends StatelessWidget {
           width: logoSize,
           height: logoSize,
           child: Image.asset(
-            imagePath ?? 'assets/images/logos.png',
+            imagePath ?? 'assets/images/skillup_logo.jpg',
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
               // Fallback إذا لم توجد الصورة

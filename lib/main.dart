@@ -7,7 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'config/supabase_config.dart';
 import 'providers/auth_provider.dart';
-import 'screens/auth_wrapper.dart';
+import 'screens/splash_screen.dart';
 import 'services/push_notification_service.dart';
 
 void main() async {
@@ -65,7 +65,7 @@ class MyApp extends StatelessWidget {
           textTheme: GoogleFonts.cairoTextTheme(),
           fontFamily: GoogleFonts.cairo().fontFamily,
         ),
-        home: const AuthWrapper(),
+        home: const SplashScreen(),
       ),
     );
   }

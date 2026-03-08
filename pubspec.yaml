@@ -96,9 +96,9 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/images/logos.png"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logos.png"
+  image_path: "assets/images/skillup_logo.jpg"
+  adaptive_icon_background: "#87CEEB"
+  adaptive_icon_foreground: "assets/images/skillup_logo.jpg"
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
