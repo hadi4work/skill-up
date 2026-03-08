@@ -685,14 +685,16 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () {
-                        // TODO: Edit assignment - navigate to edit screen
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('ميزة التعديل قريباً', style: GoogleFonts.cairo()),
-                            backgroundColor: Colors.orange,
+                      onPressed: () async {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CreateAssignmentScreen(
+                              assignment: assignment,
+                            ),
                           ),
                         );
+                        if (result == true) _loadRecentAssignments();
                       },
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFF7C3AED)),

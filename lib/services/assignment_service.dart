@@ -5,6 +5,7 @@ import '../models/submission_model.dart';
 import 'notification_service.dart';
 import 'class_service.dart';
 import 'user_service.dart';
+import 'storage_service.dart';
 
 class AssignmentService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -13,6 +14,7 @@ class AssignmentService {
   final NotificationService _notificationService = NotificationService();
   final ClassService _classService = ClassService();
   final UserService _userService = UserService();
+  final StorageService _storageService = StorageService();
 
   // Create a new assignment
   Future<String> createAssignment(AssignmentModel assignment) async {
@@ -427,9 +429,18 @@ class AssignmentService {
     }
   }
 
-  // Delete assignment
+  // Delete assignment (ويحذف صورة الواجب من Supabase لتوفير المساحة)
   Future<void> deleteAssignment(String assignmentId) async {
     try {
+      final assignment = await getAssignmentById(assignmentId);
+      if (assignment != null &&
+          assignment.assignmentImageUrl.isNotEmpty) {
+        try {
+          await _storageService.deleteImage(assignment.assignmentImageUrl);
+        } catch (e) {
+          debugPrint('Error deleting assignment image from storage: $e');
+        }
+      }
       await _firestore
           .collection(_assignmentsCollection)
           .doc(assignmentId)

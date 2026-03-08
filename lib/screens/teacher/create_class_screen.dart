@@ -668,6 +668,56 @@ class _CreateClassScreenState extends State<CreateClassScreen>
     );
   }
 
+  Future<void> _addStudentCodeToEditDialog(
+    String code,
+    List<String> studentCodes,
+    void Function(void Function()) setDialogState,
+  ) async {
+    try {
+      final student = await _userService.getUserByStudentCode(code);
+      if (student == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'كود الطالب غير موجود',
+                style: GoogleFonts.cairo(),
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      if (studentCodes.contains(code)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'الطالب موجود بالفعل',
+                style: GoogleFonts.cairo(),
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+      setDialogState(() {
+        studentCodes.add(code);
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('حدث خطأ: $e', style: GoogleFonts.cairo()),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   void _showEditClassDialog(ClassModel classModel) {
     final nameController = TextEditingController(text: classModel.name);
     final sectionController = TextEditingController(text: classModel.section);
@@ -735,57 +785,42 @@ class _CreateClassScreenState extends State<CreateClassScreen>
                         ),
                       ),
                       const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: () async {
+                          final code = await Navigator.push<String>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => QRScannerScreen(
+                                onCodeScanned: (c) =>
+                                    Navigator.pop(context, c),
+                              ),
+                            ),
+                          );
+                          if (code == null || code.isEmpty) return;
+                          await _addStudentCodeToEditDialog(
+                            code,
+                            studentCodes,
+                            setDialogState,
+                          );
+                        },
+                        style: IconButton.styleFrom(
+                          backgroundColor: const Color(0xFF7C3AED),
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.qr_code_scanner),
+                        tooltip: 'قراءة باركود الطالب',
+                      ),
+                      const SizedBox(width: 8),
                       ElevatedButton(
                         onPressed: () async {
                           String code = studentCodeController.text.trim();
                           if (code.isEmpty) return;
-
-                          try {
-                            final student = await _userService
-                                .getUserByStudentCode(code);
-                            if (student == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'كود الطالب غير موجود',
-                                    style: GoogleFonts.cairo(),
-                                  ),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                              return;
-                            }
-
-                            if (studentCodes.contains(code)) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'الطالب موجود بالفعل',
-                                    style: GoogleFonts.cairo(),
-                                  ),
-                                  backgroundColor: Colors.orange,
-                                ),
-                              );
-                              return;
-                            }
-
-                            setDialogState(() {
-                              studentCodes.add(code);
-                              studentCodeController.clear();
-                            });
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'حدث خطأ: $e',
-                                    style: GoogleFonts.cairo(),
-                                  ),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          }
+                          await _addStudentCodeToEditDialog(
+                            code,
+                            studentCodes,
+                            setDialogState,
+                          );
+                          studentCodeController.clear();
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF22C55E),

@@ -14,7 +14,9 @@ import '../../widgets/gradient_button.dart';
 import 'create_class_screen.dart';
 
 class CreateAssignmentScreen extends StatefulWidget {
-  const CreateAssignmentScreen({super.key});
+  final AssignmentModel? assignment;
+
+  const CreateAssignmentScreen({super.key, this.assignment});
 
   @override
   State<CreateAssignmentScreen> createState() => _CreateAssignmentScreenState();
@@ -29,16 +31,28 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
   final ClassService _classService = ClassService();
   final StorageService _storageService = StorageService();
   final ImagePicker _picker = ImagePicker();
-  
+
   bool _isLoading = false;
   File? _assignmentImage;
+  String? _existingImageUrl;
   DateTime? _selectedDeadline;
   final List<String> _selectedClassIds = [];
   List<ClassModel> _teacherClasses = [];
 
+  bool get _isEditMode => widget.assignment != null;
+
   @override
   void initState() {
     super.initState();
+    if (_isEditMode) {
+      final a = widget.assignment!;
+      _titleController.text = a.title;
+      _subjectController.text = a.subject;
+      _notesController.text = a.notes ?? '';
+      _selectedDeadline = a.deadline;
+      _selectedClassIds.addAll(a.classIds);
+      _existingImageUrl = a.assignmentImageUrl;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadTeacherClasses();
     });
@@ -146,10 +160,19 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
 
   Future<void> _createAssignment() async {
     if (_formKey.currentState!.validate()) {
-      if (_assignmentImage == null) {
+      if (!_isEditMode && _assignmentImage == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('يرجى التقاط صورة الواجب', style: GoogleFonts.cairo()),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      if (_isEditMode && _assignmentImage == null && _existingImageUrl == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('يرجى التقاط صورة الواجب أو الإبقاء على الصورة الحالية', style: GoogleFonts.cairo()),
             backgroundColor: Colors.red,
           ),
         );
@@ -191,7 +214,41 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
       }
 
       try {
-        // Create assignment first to get ID
+        String imageUrl;
+        if (_isEditMode) {
+          final assignmentId = widget.assignment!.id;
+          if (_assignmentImage != null) {
+            imageUrl = await _storageService.uploadAssignmentImage(
+              _assignmentImage!,
+              assignmentId,
+            );
+            if (_existingImageUrl != null && _existingImageUrl!.isNotEmpty) {
+              await _storageService.deleteImage(_existingImageUrl!);
+            }
+          } else {
+            imageUrl = _existingImageUrl ?? '';
+          }
+          await _assignmentService.updateAssignment(assignmentId, {
+            'title': _titleController.text.trim(),
+            'subject': _subjectController.text.trim(),
+            'notes': _notesController.text.trim().isEmpty ? null : _notesController.text.trim(),
+            'deadline': _selectedDeadline!.toIso8601String(),
+            'classIds': _selectedClassIds,
+            'assignmentImageUrl': imageUrl,
+          });
+          if (mounted) {
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('تم تحديث الواجب بنجاح', style: GoogleFonts.cairo()),
+                backgroundColor: Colors.green,
+              ),
+            );
+            Navigator.pop(context, true);
+          }
+          return;
+        }
+
         AssignmentModel newAssignment = AssignmentModel(
           id: '',
           title: _titleController.text.trim(),
@@ -201,28 +258,24 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
               : _notesController.text.trim(),
           assignmentImageUrl: '',
           teacherId: teacherId,
-          classIds: _selectedClassIds,
+          classIds: List.from(_selectedClassIds),
           deadline: _selectedDeadline!,
           createdAt: DateTime.now(),
         );
 
         String assignmentId = await _assignmentService.createAssignment(newAssignment);
 
-        // Upload image
-        String imageUrl = await _storageService.uploadAssignmentImage(
+        imageUrl = await _storageService.uploadAssignmentImage(
           _assignmentImage!,
           assignmentId,
         );
 
-        // Update assignment with image URL
         await _assignmentService.updateAssignment(assignmentId, {
           'assignmentImageUrl': imageUrl,
         });
 
         if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
+          setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('تم إنشاء الواجب بنجاح', style: GoogleFonts.cairo()),
@@ -259,7 +312,7 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'إنشاء واجب جديد',
+          _isEditMode ? 'تعديل الواجب' : 'إنشاء واجب جديد',
           style: GoogleFonts.cairo(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -351,7 +404,16 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
                               fit: BoxFit.cover,
                             ),
                           )
-                        : Column(
+                        : _existingImageUrl != null && _existingImageUrl!.isNotEmpty
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(
+                                  _existingImageUrl!,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _buildPlaceholderImage(),
+                                ),
+                              )
+                            : Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               const Icon(
@@ -372,7 +434,6 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                // Deadline
                 Text(
                   'الموعد النهائي',
                   style: GoogleFonts.cairo(
@@ -413,7 +474,6 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                // Select Classes
                 Text(
                   'اختر الصفوف',
                   style: GoogleFonts.cairo(
@@ -483,9 +543,8 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
                         },
                       )),
                 const SizedBox(height: 32),
-                // Create Button
                 GradientButton(
-                  text: 'إنشاء الواجب',
+                  text: _isEditMode ? 'حفظ التعديلات' : 'إنشاء الواجب',
                   onPressed: _createAssignment,
                   icon: Icons.check,
                   isLoading: _isLoading,
@@ -495,6 +554,20 @@ class _CreateAssignmentScreenState extends State<CreateAssignmentScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildPlaceholderImage() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.camera_alt, size: 48, color: Color(0xFF6B7280)),
+        const SizedBox(height: 12),
+        Text(
+          'اضغط للتقاط صورة الواجب',
+          style: GoogleFonts.cairo(fontSize: 14, color: const Color(0xFF6B7280)),
+        ),
+      ],
     );
   }
 }

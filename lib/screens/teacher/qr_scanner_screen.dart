@@ -55,9 +55,8 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
                   final String code = barcode.rawValue!;
                   // Stop scanning
                   cameraController.stop();
-                  // Return the scanned code
                   widget.onCodeScanned(code);
-                  Navigator.pop(context);
+                  Navigator.pop(context, code);
                   break;
                 }
               }
