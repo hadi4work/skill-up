@@ -1,52 +1,67 @@
 import 'dart:io';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../config/supabase_config.dart';
 
+/// تخزين الصور في Supabase Storage (يعمل من سوريا) - Firebase يبقى للـ Auth و Firestore
 class StorageService {
-  final FirebaseStorage _storage = FirebaseStorage.instance;
+  static const String _bucket = SupabaseConfig.storageBucket;
 
-  // Upload assignment image
+  SupabaseClient get _client => Supabase.instance.client;
+
+  /// رفع صورة الواجب → يُرجع رابط عام من Supabase
   Future<String> uploadAssignmentImage(File imageFile, String assignmentId) async {
     try {
-      String fileName = 'assignments/$assignmentId/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      Reference ref = _storage.ref().child(fileName);
-
-      UploadTask uploadTask = ref.putFile(imageFile);
-      TaskSnapshot snapshot = await uploadTask;
-      String downloadUrl = await snapshot.ref.getDownloadURL();
-
-      return downloadUrl;
+      final path =
+          'assignments/$assignmentId/${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await _client.storage.from(_bucket).upload(
+            path,
+            imageFile,
+            fileOptions: const FileOptions(upsert: true),
+          );
+      final url = _client.storage.from(_bucket).getPublicUrl(path);
+      return url;
     } catch (e) {
       debugPrint('Error uploading assignment image: $e');
       throw 'حدث خطأ أثناء رفع صورة الواجب: $e';
     }
   }
 
-  // Upload submission image
+  /// رفع صورة التسليم → يُرجع رابط عام من Supabase
   Future<String> uploadSubmissionImage(File imageFile, String submissionId) async {
     try {
-      String fileName = 'submissions/$submissionId/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      Reference ref = _storage.ref().child(fileName);
-
-      UploadTask uploadTask = ref.putFile(imageFile);
-      TaskSnapshot snapshot = await uploadTask;
-      String downloadUrl = await snapshot.ref.getDownloadURL();
-
-      return downloadUrl;
+      final path =
+          'submissions/$submissionId/${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await _client.storage.from(_bucket).upload(
+            path,
+            imageFile,
+            fileOptions: const FileOptions(upsert: true),
+          );
+      final url = _client.storage.from(_bucket).getPublicUrl(path);
+      return url;
     } catch (e) {
       debugPrint('Error uploading submission image: $e');
       throw 'حدث خطأ أثناء رفع صورة الحل: $e';
     }
   }
 
-  // Delete image
+  /// حذف صورة (يدعم روابط Supabase فقط؛ روابط Firebase القديمة تُتجاهل)
   Future<void> deleteImage(String imageUrl) async {
     try {
-      Reference ref = _storage.refFromURL(imageUrl);
-      await ref.delete();
+      final path = _pathFromSupabaseUrl(imageUrl);
+      if (path == null) return;
+      await _client.storage.from(_bucket).remove([path]);
     } catch (e) {
       debugPrint('Error deleting image: $e');
-      // Don't throw error, just log it
     }
+  }
+
+  /// استخراج المسار من رابط Supabase العام
+  /// مثال: .../object/public/images/assignments/xxx/1.jpg → assignments/xxx/1.jpg
+  String? _pathFromSupabaseUrl(String imageUrl) {
+    const prefix = '/object/public/$_bucket/';
+    final i = imageUrl.indexOf(prefix);
+    if (i == -1) return null;
+    return imageUrl.substring(i + prefix.length);
   }
 }

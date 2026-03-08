@@ -4,6 +4,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config/supabase_config.dart';
 import 'providers/auth_provider.dart';
 import 'screens/auth_wrapper.dart';
 import 'services/push_notification_service.dart';
@@ -12,14 +14,21 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp();
-    
-    // Initialize push notifications (Android only)
-    if (Platform.isAndroid) {
+
+    await Supabase.initialize(
+      url: SupabaseConfig.url,
+      anonKey: SupabaseConfig.anonKey,
+    );
+  } catch (e) {
+    debugPrint('Firebase/Supabase initialization error: $e');
+  }
+  if (Platform.isAndroid) {
+    try {
       final pushNotificationService = PushNotificationService();
       await pushNotificationService.initialize();
+    } catch (e) {
+      debugPrint('Push notification init error: $e');
     }
-  } catch (e) {
-    debugPrint('Firebase initialization error: $e');
   }
   runApp(const MyApp());
 }
