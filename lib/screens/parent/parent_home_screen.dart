@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/notification_service.dart';
 import 'parent_profile_screen.dart';
+import 'parent_analytics_screen.dart';
 import '../shared/notifications_screen.dart';
 
 class ParentHomeScreen extends StatefulWidget {
@@ -79,14 +80,8 @@ class _ParentHomeScreenState extends State<ParentHomeScreen> {
     );
   }
 
-  // Placeholder for Reports Page
   Widget _buildReportsPage() {
-    return Center(
-      child: Text(
-        'صفحة التقارير',
-        style: GoogleFonts.cairo(fontSize: 24),
-      ),
-    );
+    return const ParentAnalyticsScreen();
   }
 
   // Placeholder for Notifications Page

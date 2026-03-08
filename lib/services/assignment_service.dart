@@ -388,6 +388,30 @@ class AssignmentService {
     }
   }
 
+  // Get all submissions by a student (for analytics)
+  Future<List<SubmissionModel>> getSubmissionsByStudentId(String studentId) async {
+    try {
+      QuerySnapshot querySnapshot = await _firestore
+          .collection(_submissionsCollection)
+          .where('studentId', isEqualTo: studentId)
+          .get();
+
+      final list = querySnapshot.docs
+          .map((doc) {
+            final data = doc.data() as Map<String, dynamic>? ?? {};
+            final map = Map<String, dynamic>.from(data);
+            map['id'] = doc.id;
+            return SubmissionModel.fromMap(map);
+          })
+          .toList();
+      list.sort((a, b) => b.submittedAt.compareTo(a.submittedAt));
+      return list;
+    } catch (e) {
+      debugPrint('Error getting submissions by student: $e');
+      return [];
+    }
+  }
+
   // Get submission count for an assignment
   Future<int> getSubmissionCount(String assignmentId) async {
     try {

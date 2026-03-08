@@ -12,6 +12,7 @@ import 'create_assignment_screen.dart';
 import 'teacher_assignments_screen.dart';
 import 'grade_submissions_screen.dart';
 import 'incomplete_assignments_screen.dart';
+import 'teacher_analytics_screen.dart';
 import '../shared/notifications_screen.dart';
 
 class TeacherHomeScreen extends StatefulWidget {
@@ -194,14 +195,8 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
     return const TeacherAssignmentsScreen();
   }
 
-  // Placeholder for Analytics Page
   Widget _buildAnalyticsPage() {
-    return Center(
-      child: Text(
-        'صفحة التحليلات',
-        style: GoogleFonts.cairo(fontSize: 24),
-      ),
-    );
+    return const TeacherAnalyticsScreen();
   }
 
   // Header with greeting and icons
@@ -357,7 +352,8 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
                 title: 'عرض تحليلات\nالفصل',
                 color: const Color(0xFF7C3AED),
                 onTap: () {
-                  // TODO: Navigate to analytics
+                  // Already on analytics tab when tapping from home; switch tab
+                  setState(() => _currentIndex = 2);
                 },
               ),
             ),

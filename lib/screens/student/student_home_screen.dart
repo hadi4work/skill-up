@@ -8,6 +8,7 @@ import '../../models/assignment_model.dart';
 import '../../models/notification_model.dart';
 import 'student_profile_screen.dart';
 import 'student_assignments_screen.dart';
+import 'student_analytics_screen.dart';
 import 'notifications_screen.dart';
 import 'submit_assignment_screen.dart';
 
@@ -154,11 +155,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     return const StudentAssignmentsScreen();
   }
 
-  // Placeholder for Analytics Page
   Widget _buildAnalyticsPage() {
-    return Center(
-      child: Text('صفحة التحليلات', style: GoogleFonts.cairo(fontSize: 24)),
-    );
+    return const StudentAnalyticsScreen();
   }
 
   // Header with greeting and icons
