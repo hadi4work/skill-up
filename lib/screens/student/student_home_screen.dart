@@ -11,6 +11,7 @@ import 'student_assignments_screen.dart';
 import 'student_analytics_screen.dart';
 import 'notifications_screen.dart';
 import 'submit_assignment_screen.dart';
+import '../ai_assistant_screen.dart';
 
 class StudentHomeScreen extends StatefulWidget {
   const StudentHomeScreen({super.key});
@@ -128,6 +129,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   const SizedBox(height: 16),
                   // Progress & Gamification Section
                   _buildProgressSection(),
+                  const SizedBox(height: 16),
+                  // AI Assistant quick access
+                  _buildAIAssistantCard(),
                   const SizedBox(height: 24),
                   // Current Assignments Section
                   _buildAssignmentsSection(),
@@ -499,6 +503,77 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     if (level == 9) return 192000;
     if (level == 10) return 384000;
     return 768000; // Level 11+ (max)
+  }
+
+  Widget _buildAIAssistantCard() {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const AIAssistantScreen(),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              const Color(0xFF7C3AED).withValues(alpha: 0.15),
+              const Color(0xFF2563EB).withValues(alpha: 0.15),
+            ],
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: const Color(0xFF7C3AED).withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C3AED).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.psychology,
+                color: Color(0xFF7C3AED),
+                size: 28,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'مساعد الذكاء الاصطناعي',
+                    style: GoogleFonts.cairo(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF111827),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'اسأل أو اطلب تلميحاً للواجبات',
+                    style: GoogleFonts.cairo(
+                      fontSize: 13,
+                      color: const Color(0xFF6B7280),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFF6B7280)),
+          ],
+        ),
+      ),
+    );
   }
 
   // Current Assignments Section

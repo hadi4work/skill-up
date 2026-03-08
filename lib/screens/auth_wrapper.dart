@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import 'onboarding_page.dart';
 import 'login_screen.dart';
+import 'choose_account_type_screen.dart';
 import 'student/student_home_screen.dart';
 import 'teacher/teacher_home_screen.dart';
 import 'parent/parent_home_screen.dart';
@@ -33,6 +34,11 @@ class AuthWrapper extends StatelessWidget {
               ),
             ),
           );
+        }
+
+        // تسجيل الدخول بـ Google لكن بدون اختيار نوع الحساب بعد
+        if (authProvider.needsAccountTypeSelection) {
+          return const ChooseAccountTypeScreen();
         }
 
         // If user is authenticated, show appropriate home screen

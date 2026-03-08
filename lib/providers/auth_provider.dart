@@ -27,6 +27,15 @@ class AuthProvider with ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get isAuthenticated => _user != null;
 
+  /// المستخدم مسجّل دخوله في Firebase لكن لم يختر نوع الحساب بعد (مثلاً بعد تسجيل الدخول بـ Google لأول مرة).
+  bool get needsAccountTypeSelection {
+    User? fb = _authService.currentUser;
+    if (fb == null) return false;
+    return _user == null || (_user!.accountType.isEmpty);
+  }
+
+  User? get firebaseUser => _authService.currentUser;
+
   // Initialize and check auth state
   Future<void> _init() async {
     // Check current user immediately
@@ -291,27 +300,22 @@ class AuthProvider with ChangeNotifier {
 
       if (userCredential?.user != null) {
         User firebaseUser = userCredential!.user!;
-        
-        // Check if user profile exists
+
         UserModel? existingUser =
             await _userService.getUserProfile(firebaseUser.uid);
 
-        if (existingUser == null) {
-          // Create new user profile (will need account type selection)
-          // For now, we'll need to handle this in the UI
-          _errorMessage = 'يرجى إنشاء حساب أولاً باستخدام البريد الإلكتروني';
+        // إذا لم يكن لديه ملف أو نوع الحساب غير محدد، نوجّهه لشاشة اختيار نوع الحساب
+        if (existingUser == null || existingUser.accountType.isEmpty) {
+          _user = null;
           _isLoading = false;
+          _errorMessage = null;
           notifyListeners();
-          return false;
+          return true; // الدخول نجح، لكن يجب اختيار نوع الحساب قبل المتابعة
         }
 
         await _loadUserProfile(firebaseUser.uid);
-        // Start listening to user profile changes
         _listenToUserProfileChanges(firebaseUser.uid);
-        
-        // Save FCM token for push notifications
         await _saveFCMToken(firebaseUser.uid);
-        
         await _saveAuthState(true);
         return true;
       }
@@ -320,6 +324,56 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       return false;
     } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// إكمال التسجيل عبر Google باختيار نوع الحساب (طالب / معلم / ولي أمر).
+  Future<bool> completeGoogleRegistration(String accountType) async {
+    User? fb = _authService.currentUser;
+    if (fb == null) {
+      _errorMessage = 'لم يتم تسجيل الدخول';
+      return false;
+    }
+
+    try {
+      _isLoading = true;
+      _errorMessage = null;
+      notifyListeners();
+
+      String name = fb.displayName ?? fb.email ?? 'مستخدم';
+      String email = fb.email ?? '';
+
+      UserModel newUser = UserModel.fromFirebaseUser(
+        uid: fb.uid,
+        name: name,
+        email: email,
+        accountType: accountType,
+      );
+
+      if (accountType == 'student') {
+        try {
+          String studentCode = await _userService.generateStudentCode();
+          newUser = newUser.copyWith(studentCode: studentCode);
+        } catch (e) {
+          debugPrint('⚠️ Error generating student code: $e');
+        }
+      }
+
+      await _userService.createUserProfile(newUser);
+      await _loadUserProfile(fb.uid);
+      _listenToUserProfileChanges(fb.uid);
+      await _saveFCMToken(fb.uid);
+      await _saveAuthState(true);
+
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('❌ completeGoogleRegistration error: $e');
       _errorMessage = e.toString();
       _isLoading = false;
       notifyListeners();

@@ -51,6 +51,8 @@ class AuthService {
   // Sign in with Google
   Future<UserCredential?> signInWithGoogle() async {
     try {
+      // تسجيل الخروج من Google أولاً حتى تظهر قائمة الحسابات في كل مرة
+      await _googleSignIn.signOut();
       // Trigger the authentication flow
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
 

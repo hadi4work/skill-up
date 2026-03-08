@@ -63,6 +63,12 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^5.2.3
 
+  # OCR - استخراج النص من الصور (بدون ML Kit لتجنب مشاكل البناء)
+  textify: ^0.3.3
+  http: ^1.2.2
+  path_provider: ^2.1.4
+  path: ^1.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -10,6 +10,7 @@ import '../../services/user_service.dart';
 import '../../models/assignment_model.dart';
 import '../../models/submission_model.dart';
 import '../image_viewer_screen.dart';
+import '../ai_assistant_screen.dart';
 
 class SubmitAssignmentScreen extends StatefulWidget {
   final AssignmentModel assignment;
@@ -374,13 +375,42 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
               ],
               // Assignment Image (Questions)
               if (widget.assignment.assignmentImageUrl.isNotEmpty) ...[
-                Text(
-                  'صورة الأسئلة',
-                  style: GoogleFonts.cairo(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF111827),
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'صورة الأسئلة',
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF111827),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => AIAssistantScreen(
+                              subject: widget.assignment.subject,
+                              question: widget.assignment.title +
+                                  (widget.assignment.notes != null
+                                      ? '\n${widget.assignment.notes}'
+                                      : ''),
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.lightbulb_outline, size: 20),
+                      label: Text(
+                        'تلميح من الذكاء الاصطناعي',
+                        style: GoogleFonts.cairo(fontSize: 13),
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF7C3AED),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 GestureDetector(
