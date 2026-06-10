@@ -4,8 +4,12 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/assignment_service.dart';
 import '../../services/class_service.dart';
+import '../../services/user_service.dart';
 import '../../models/assignment_model.dart';
 import '../../models/class_model.dart';
+import '../../models/submission_model.dart';
+import '../../models/user_model.dart';
+import 'teacher_class_analytics_screen.dart';
 
 class TeacherAnalyticsScreen extends StatefulWidget {
   const TeacherAnalyticsScreen({super.key});
@@ -17,12 +21,14 @@ class TeacherAnalyticsScreen extends StatefulWidget {
 class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
   final AssignmentService _assignmentService = AssignmentService();
   final ClassService _classService = ClassService();
+  final UserService _userService = UserService();
   List<AssignmentModel> _assignments = [];
   List<ClassModel> _classes = [];
   bool _loading = true;
   int _totalStudents = 0;
   int _totalSubmissions = 0;
   double _avgGradePercent = 0;
+  List<_ClassRankItem> _classRankings = [];
 
   @override
   void initState() {
@@ -44,10 +50,26 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
       int totalSubmissions = 0;
       int gradedCount = 0;
       double sumGradePercent = 0;
+      final classRankings = <_ClassRankItem>[];
 
       for (final c in classes) {
         totalStudents += c.studentCodes.length;
       }
+
+      // Build per-class ranking
+      for (final c in classes) {
+        final details = await _buildClassDetails(c, assignments);
+        classRankings.add(
+          _ClassRankItem(
+            classModel: c,
+            avgPercent: details.avgGradePercent,
+            completionRate: details.completionRate,
+            studentsCount: c.studentCodes.length,
+          ),
+        );
+      }
+      classRankings.sort((a, b) => b.avgPercent.compareTo(a.avgPercent));
+
       for (final a in assignments) {
         final subs = await _assignmentService.getAssignmentSubmissions(a.id);
         totalSubmissions += subs.length;
@@ -64,6 +86,7 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
           _totalStudents = totalStudents;
           _totalSubmissions = totalSubmissions;
           _avgGradePercent = gradedCount > 0 ? sumGradePercent / gradedCount : 0;
+          _classRankings = classRankings;
           _loading = false;
         });
       }
@@ -71,6 +94,66 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
       debugPrint('TeacherAnalytics load error: $e');
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<_ClassDetails> _buildClassDetails(ClassModel c, List<AssignmentModel> assignments) async {
+    final classAssignments = assignments.where((a) => a.classIds.contains(c.id)).toList();
+    if (classAssignments.isEmpty) {
+      return _ClassDetails(
+        classId: c.id,
+        avgGradePercent: 0,
+        completionRate: 0,
+        studentRankings: [],
+      );
+    }
+
+    int expectedSubmissions = classAssignments.length * c.studentCodes.length;
+    int actualSubmissions = 0;
+    int gradedCount = 0;
+    double gradesSum = 0;
+    final Map<String, List<double>> studentPercents = {};
+    final Map<String, UserModel?> studentByCode = {};
+
+    for (final code in c.studentCodes) {
+      studentByCode[code] = await _userService.getUserByStudentCode(code);
+    }
+    final Set<String> classStudentIds = studentByCode.values.whereType<UserModel>().map((u) => u.uid).toSet();
+
+    for (final a in classAssignments) {
+      final subs = await _assignmentService.getAssignmentSubmissions(a.id);
+      final classSubs = subs.where((s) => classStudentIds.contains(s.studentId)).toList();
+      actualSubmissions += classSubs.length;
+      for (final SubmissionModel s in classSubs) {
+        if (!s.isGraded || s.grade == null || a.totalPoints <= 0) continue;
+        final p = (s.grade! / a.totalPoints) * 100;
+        gradedCount += 1;
+        gradesSum += p;
+        studentPercents.putIfAbsent(s.studentId, () => []).add(p);
+      }
+    }
+
+    final studentRankings = studentPercents.entries.map((e) {
+      final avg = e.value.reduce((a, b) => a + b) / e.value.length;
+      final user = studentByCode.values.whereType<UserModel>().firstWhere(
+            (u) => u.uid == e.key,
+            orElse: () => UserModel(
+              uid: e.key,
+              name: 'طالب',
+              email: '',
+              accountType: 'student',
+              createdAt: DateTime.now(),
+            ),
+          );
+      return _StudentRankItem(studentId: e.key, name: user.name, avgPercent: avg);
+    }).toList()
+      ..sort((a, b) => b.avgPercent.compareTo(a.avgPercent));
+
+    return _ClassDetails(
+      classId: c.id,
+      avgGradePercent: gradedCount == 0 ? 0 : gradesSum / gradedCount,
+      completionRate: expectedSubmissions == 0 ? 0 : (actualSubmissions / expectedSubmissions) * 100,
+      studentRankings: studentRankings,
+    );
   }
 
   @override
@@ -357,7 +440,10 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
       return _emptyCard('لا توجد صفوف بعد');
     }
     return Column(
-      children: _classes.map((c) {
+      children: _classRankings.asMap().entries.map((entry) {
+        final rankIndex = entry.key + 1;
+        final item = entry.value;
+        final c = item.classModel;
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(14),
@@ -372,7 +458,19 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
               ),
             ],
           ),
-          child: Row(
+          child: InkWell(
+            onTap: () async {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => TeacherClassAnalyticsScreen(
+                    classModel: c,
+                    assignments: _assignments,
+                  ),
+                ),
+              );
+            },
+            child: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(10),
@@ -383,6 +481,22 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
                 child: const Icon(Icons.class_, color: Color(0xFF7C3AED), size: 24),
               ),
               const SizedBox(width: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF111827),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '#$rankIndex',
+                  style: GoogleFonts.cairo(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -397,7 +511,7 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${c.studentCodes.length} طالب',
+                      '${item.studentsCount} طالب • ${item.avgPercent.toStringAsFixed(0)}%',
                       style: GoogleFonts.cairo(
                         fontSize: 13,
                         color: const Color(0xFF6B7280),
@@ -414,6 +528,7 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
                 ),
               ),
             ],
+            ),
           ),
         );
       }).toList(),
@@ -445,4 +560,44 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen> {
       ),
     );
   }
+}
+
+class _ClassRankItem {
+  final ClassModel classModel;
+  final double avgPercent;
+  final double completionRate;
+  final int studentsCount;
+
+  _ClassRankItem({
+    required this.classModel,
+    required this.avgPercent,
+    required this.completionRate,
+    required this.studentsCount,
+  });
+}
+
+class _StudentRankItem {
+  final String studentId;
+  final String name;
+  final double avgPercent;
+
+  _StudentRankItem({
+    required this.studentId,
+    required this.name,
+    required this.avgPercent,
+  });
+}
+
+class _ClassDetails {
+  final String classId;
+  final double avgGradePercent;
+  final double completionRate;
+  final List<_StudentRankItem> studentRankings;
+
+  _ClassDetails({
+    required this.classId,
+    required this.avgGradePercent,
+    required this.completionRate,
+    required this.studentRankings,
+  });
 }

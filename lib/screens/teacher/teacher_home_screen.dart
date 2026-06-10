@@ -5,13 +5,18 @@ import '../../providers/auth_provider.dart';
 import '../../services/assignment_service.dart';
 import '../../services/class_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/ai_service.dart';
+import '../../services/user_service.dart';
 import '../../models/assignment_model.dart';
+import '../../models/submission_model.dart';
+import '../../models/user_model.dart';
 import 'teacher_profile_screen.dart';
 import 'create_class_screen.dart';
 import 'create_assignment_screen.dart';
 import 'teacher_assignments_screen.dart';
 import 'grade_submissions_screen.dart';
 import 'incomplete_assignments_screen.dart';
+import 'low_performance_students_screen.dart';
 import 'teacher_analytics_screen.dart';
 import '../shared/notifications_screen.dart';
 
@@ -26,8 +31,22 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
   int _currentIndex = 0;
   final AssignmentService _assignmentService = AssignmentService();
   final ClassService _classService = ClassService();
+  final AIService _aiService = AIService();
+  final NotificationService _notificationService = NotificationService();
+  final UserService _userService = UserService();
   List<AssignmentModel> _recentAssignments = [];
   bool _isLoadingAssignments = false;
+  bool _isLoadingDashboard = false;
+  double _avgGradesPercent = 0;
+  double _completionRatePercent = 0;
+  int _lowPerformanceStudentsCount = 0;
+  int _incompleteAssignmentsCount = 0;
+  List<MapEntry<String, int>> _commonMistakes = [];
+  List<String> _weakSubjects = [];
+  List<String> _exerciseSuggestions = [];
+  List<String> _studentsNeedFollowUp = [];
+  String _aiClassInsight = 'لا توجد معلومات كافية الآن';
+  bool _sendingIncompleteAlerts = false;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +75,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadRecentAssignments();
+      _loadDashboardStats();
     });
   }
 
@@ -91,6 +111,143 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
           _isLoadingAssignments = false;
         });
       }
+    }
+  }
+
+  Future<void> _loadDashboardStats() async {
+    if (_isLoadingDashboard) return;
+    final teacherId = Provider.of<AuthProvider>(context, listen: false).user?.uid;
+    if (teacherId == null) return;
+
+    setState(() => _isLoadingDashboard = true);
+    try {
+      final assignments = await _assignmentService.getTeacherAssignments(teacherId);
+      if (assignments.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _avgGradesPercent = 0;
+          _completionRatePercent = 0;
+          _lowPerformanceStudentsCount = 0;
+          _incompleteAssignmentsCount = 0;
+          _commonMistakes = [];
+          _weakSubjects = [];
+          _exerciseSuggestions = [];
+          _studentsNeedFollowUp = [];
+          _aiClassInsight = 'لا توجد بيانات كافية بعد. ابدأ بإضافة واجبات وتقييمها.';
+          _isLoadingDashboard = false;
+        });
+        return;
+      }
+
+      int expectedSubmissions = 0;
+      int actualSubmissions = 0;
+      int gradedCount = 0;
+      double gradePercentSum = 0;
+      int incompleteAssignments = 0;
+      final Map<String, List<double>> subjectPercents = {};
+      final Map<String, List<double>> studentPercents = {};
+
+      for (final assignment in assignments) {
+        final submissions = await _assignmentService.getAssignmentSubmissions(assignment.id);
+        actualSubmissions += submissions.length;
+        int totalStudentsForAssignment = 0;
+        for (final classId in assignment.classIds) {
+          final classModel = await _classService.getClassById(classId);
+          if (classModel != null) totalStudentsForAssignment += classModel.studentCodes.length;
+        }
+        expectedSubmissions += totalStudentsForAssignment;
+        if (submissions.length < totalStudentsForAssignment) {
+          incompleteAssignments += 1;
+        }
+
+        for (final SubmissionModel s in submissions) {
+          if (!s.isGraded || s.grade == null || assignment.totalPoints <= 0) continue;
+          final percent = (s.grade! / assignment.totalPoints) * 100;
+          gradePercentSum += percent;
+          gradedCount += 1;
+          subjectPercents.putIfAbsent(assignment.subject, () => []).add(percent);
+          studentPercents.putIfAbsent(s.studentId, () => []).add(percent);
+        }
+      }
+
+      final avgGrades = gradedCount == 0 ? 0.0 : gradePercentSum / gradedCount;
+      final completionRate = expectedSubmissions == 0 ? 0.0 : (actualSubmissions / expectedSubmissions) * 100;
+
+      final weakSubjectsEntries = subjectPercents.entries.map((e) {
+        final avg = e.value.reduce((a, b) => a + b) / e.value.length;
+        return MapEntry(e.key, avg);
+      }).toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+      final weakSubjects = weakSubjectsEntries.take(3).map((e) => e.key).toList();
+
+      final commonMistakes = weakSubjectsEntries
+          .take(3)
+          .map((e) => MapEntry(e.key, e.value.round()))
+          .toList();
+
+      final lowStudents = studentPercents.entries.where((e) {
+        final avg = e.value.reduce((a, b) => a + b) / e.value.length;
+        return avg < 60;
+      }).toList();
+      final lowCount = lowStudents.length;
+      final followUp = lowStudents.take(3).map((e) => 'طالب (${e.key.substring(0, e.key.length > 6 ? 6 : e.key.length)})').toList();
+
+      final exerciseSuggestions = weakSubjects.isEmpty
+          ? <String>[]
+          : weakSubjects.map((s) => 'تمارين علاجية في $s').toList();
+
+      // Call AI only when data is sufficient, to reduce token usage
+      final bool hasEnoughDataForAI =
+          gradedCount >= 5 &&
+          assignments.length >= 2 &&
+          (weakSubjects.isNotEmpty || lowCount > 0);
+
+      final aiInsight = hasEnoughDataForAI
+          ? await _buildTeacherAIInsight(
+              avgGrades: avgGrades,
+              completionRate: completionRate,
+              weakSubjects: weakSubjects,
+              lowStudentsCount: lowCount,
+            )
+          : 'لا توجد معلومات كافية الآن';
+
+      if (!mounted) return;
+      setState(() {
+        _avgGradesPercent = avgGrades;
+        _completionRatePercent = completionRate;
+        _incompleteAssignmentsCount = incompleteAssignments;
+        _commonMistakes = commonMistakes;
+        _weakSubjects = weakSubjects;
+        _exerciseSuggestions = exerciseSuggestions;
+        _lowPerformanceStudentsCount = lowCount;
+        _studentsNeedFollowUp = followUp;
+        _aiClassInsight = aiInsight;
+        _isLoadingDashboard = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoadingDashboard = false);
+    }
+  }
+
+  Future<String> _buildTeacherAIInsight({
+    required double avgGrades,
+    required double completionRate,
+    required List<String> weakSubjects,
+    required int lowStudentsCount,
+  }) async {
+    final prompt = '''
+أنت مساعد تربوي للمعلم. أعطِ توصية قصيرة جدا (سطر أو سطرين) بالعربية بناء على:
+- متوسط الدرجات: ${avgGrades.toStringAsFixed(0)}%
+- معدل التسليم: ${completionRate.toStringAsFixed(0)}%
+- المواد الضعيفة: ${weakSubjects.isEmpty ? 'غير متاح' : weakSubjects.join('، ')}
+- عدد الطلاب الذين يحتاجون متابعة: $lowStudentsCount
+اجعلها عملية ومباشرة.''';
+    try {
+      final text = await _aiService.chat(prompt: prompt);
+      return text.trim().isEmpty ? 'ركز هذا الأسبوع على تدريب نقاط الضعف ومتابعة المتأخرين.' : text.trim();
+    } catch (_) {
+      return 'ركز هذا الأسبوع على تدريب نقاط الضعف ومتابعة المتأخرين.';
     }
   }
 
@@ -144,14 +301,17 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
 
   // Home Content Widget
   Widget _buildHomeContent() {
-    return Selector<AuthProvider, String?>(
-      selector: (_, authProvider) => authProvider.user?.name,
+    return Selector<AuthProvider, (String?, String?)>(
+      selector: (_, authProvider) =>
+          (authProvider.user?.name, authProvider.user?.gender),
       shouldRebuild: (prev, next) => prev != next,
-      builder: (context, userName, _) {
+      builder: (context, data, _) {
+        final userName = data.$1;
+        final gender = data.$2;
         return Column(
       children: [
         // Top Header
-        _buildHeader(userName ?? 'المعلم'),
+        _buildHeader(userName ?? 'المعلم', gender),
         
         // Scrollable Content
         Expanded(
@@ -199,8 +359,15 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
     return const TeacherAnalyticsScreen();
   }
 
+  String _teacherGreetingLine(String userName, String? gender) {
+    if (gender == 'female') {
+      return 'أهلاً، آنسة $userName 👋';
+    }
+    return 'مرحبًا، أستاذ $userName 👋';
+  }
+
   // Header with greeting and icons
-  Widget _buildHeader(String userName) {
+  Widget _buildHeader(String userName, String? gender) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       decoration: BoxDecoration(
@@ -235,7 +402,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'مرحبًا، أستاذ $userName 👋',
+                  _teacherGreetingLine(userName, gender),
                   style: GoogleFonts.cairo(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -787,7 +954,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
             Expanded(
               child: _buildStatCard(
                 title: 'متوسط الدرجات',
-                value: '85%',
+                value: '${_avgGradesPercent.toStringAsFixed(0)}%',
                 icon: Icons.trending_up,
                 color: const Color(0xFF22C55E),
               ),
@@ -796,7 +963,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
             Expanded(
               child: _buildStatCard(
                 title: 'معدل الإنجاز',
-                value: '78%',
+                value: '${_completionRatePercent.toStringAsFixed(0)}%',
                 icon: Icons.check_circle_outline,
                 color: const Color(0xFF2563EB),
               ),
@@ -835,11 +1002,16 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              _buildMistakeItem('حل المعادلات الخطية', 12),
-              const SizedBox(height: 8),
-              _buildMistakeItem('الكسور العشرية', 8),
-              const SizedBox(height: 8),
-              _buildMistakeItem('العمليات الحسابية', 5),
+              if (_commonMistakes.isEmpty)
+                Text(
+                  'لا توجد بيانات كافية بعد',
+                  style: GoogleFonts.cairo(fontSize: 13, color: const Color(0xFF6B7280)),
+                )
+              else
+                ..._commonMistakes.map((e) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _buildMistakeItem(e.key, e.value),
+                    )),
             ],
           ),
         ),
@@ -883,7 +1055,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'أغلب الطلاب يواجهون صعوبة في الكسور',
+                      _aiClassInsight,
                       style: GoogleFonts.cairo(
                         fontSize: 12,
                         color: const Color(0xFF6B7280),
@@ -1000,21 +1172,21 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
         const SizedBox(height: 16),
         _buildInsightCard(
           title: 'المواضيع الضعيفة',
-          items: ['الكسور', 'الهندسة', 'المعادلات'],
+          items: _weakSubjects.isEmpty ? ['لا توجد بيانات كافية بعد'] : _weakSubjects,
           icon: Icons.trending_down,
           color: const Color(0xFFFB923C),
         ),
         const SizedBox(height: 12),
         _buildInsightCard(
           title: 'تمارين مقترحة',
-          items: ['ورقة عمل الكسور', 'تمارين الهندسة'],
+          items: _exerciseSuggestions.isEmpty ? ['لا توجد اقتراحات حالياً'] : _exerciseSuggestions,
           icon: Icons.lightbulb_outline,
           color: const Color(0xFF22C55E),
         ),
         const SizedBox(height: 12),
         _buildInsightCard(
           title: 'طلاب يحتاجون متابعة',
-          items: ['أحمد محمد', 'فاطمة علي', 'خالد سعيد'],
+          items: _studentsNeedFollowUp.isEmpty ? ['لا يوجد حالياً'] : _studentsNeedFollowUp,
           icon: Icons.person_outline,
           color: const Color(0xFF2563EB),
         ),
@@ -1112,18 +1284,35 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
         const SizedBox(height: 16),
         _buildAlertCard(
           title: 'أداء منخفض',
-          subtitle: '5 طلاب يحتاجون متابعة',
+          subtitle: '$_lowPerformanceStudentsCount طلاب يحتاجون متابعة',
           icon: Icons.warning_amber_rounded,
           color: const Color(0xFFFB923C),
-          action: 'إرسال تنبيه',
+          action: 'فتح القائمة',
+          onActionPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LowPerformanceStudentsScreen(),
+              ),
+            );
+          },
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const LowPerformanceStudentsScreen(),
+              ),
+            );
+          },
         ),
         const SizedBox(height: 12),
         _buildAlertCard(
           title: 'واجبات غير مكتملة',
-          subtitle: '3 واجبات لم يتم تسليمها',
+          subtitle: '$_incompleteAssignmentsCount واجبات لم يتم تسليمها بالكامل',
           icon: Icons.assignment_late,
           color: const Color(0xFF2563EB),
-          action: 'إرسال تنبيه',
+          action: _sendingIncompleteAlerts ? 'جاري الإرسال...' : 'إرسال تنبيه',
+          onActionPressed: _sendingIncompleteAlerts ? null : _sendIncompleteAssignmentAlerts,
           onTap: () {
             Navigator.push(
               context,
@@ -1143,6 +1332,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
     required IconData icon,
     required Color color,
     required String action,
+    VoidCallback? onActionPressed,
     VoidCallback? onTap,
   }) {
     Widget card = Container(
@@ -1197,9 +1387,7 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
             ),
           ),
           TextButton(
-            onPressed: () {
-              // TODO: Send alert
-            },
+            onPressed: onActionPressed,
             style: TextButton.styleFrom(
               backgroundColor: color.withValues(alpha: 0.1),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1227,6 +1415,72 @@ class _TeacherHomeScreenState extends State<TeacherHomeScreen> {
       );
     }
     return card;
+  }
+
+  Future<void> _sendIncompleteAssignmentAlerts() async {
+    setState(() => _sendingIncompleteAlerts = true);
+    try {
+      final teacherId = Provider.of<AuthProvider>(context, listen: false).user?.uid;
+      if (teacherId == null) return;
+
+      final assignments = await _assignmentService.getTeacherAssignments(teacherId);
+      int sent = 0;
+
+      for (final assignment in assignments) {
+        final subs = await _assignmentService.getAssignmentSubmissions(assignment.id);
+        final submittedIds = subs.map((s) => s.studentId).toSet();
+        final targetStudents = <UserModel>[];
+
+        for (final classId in assignment.classIds) {
+          final classModel = await _classService.getClassById(classId);
+          if (classModel == null) continue;
+          for (final code in classModel.studentCodes) {
+            final st = await _userService.getUserByStudentCode(code);
+            if (st != null && !targetStudents.any((x) => x.uid == st.uid)) {
+              targetStudents.add(st);
+            }
+          }
+        }
+
+        for (final st in targetStudents) {
+          if (submittedIds.contains(st.uid)) continue;
+          await _notificationService.sendIncompleteAssignmentNotification(
+            studentId: st.uid,
+            assignmentId: assignment.id,
+            assignmentTitle: assignment.title,
+            assignmentSubject: assignment.subject,
+          );
+          sent += 1;
+          if ((st.parentId ?? '').isNotEmpty) {
+            await _notificationService.sendParentHomeworkMissedNotification(
+              parentId: st.parentId!,
+              childName: st.name,
+              assignmentId: assignment.id,
+              assignmentTitle: assignment.title,
+              assignmentSubject: assignment.subject,
+            );
+          }
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم إرسال تنبيهات الواجبات غير المكتملة إلى $sent طالب', style: GoogleFonts.cairo()),
+          backgroundColor: const Color(0xFF16A34A),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر إرسال التنبيهات: $e', style: GoogleFonts.cairo()),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingIncompleteAlerts = false);
+    }
   }
 
   // Bottom Navigation Bar

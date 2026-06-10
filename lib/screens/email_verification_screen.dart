@@ -116,7 +116,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
             children: [
               const SizedBox(height: 40),
               // Logo
-              const SkillUpLogo(logoSize: 80, fontSize: 24),
+              const SkillUpLogo(logoSize: 80, fontSize: 24, showBrandName: false),
               const SizedBox(height: 32),
               // Icon
               Container(

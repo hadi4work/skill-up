@@ -2,14 +2,77 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/notification_model.dart';
 import '../models/assignment_model.dart';
+import '../models/exam_model.dart';
 import 'class_service.dart';
 import 'user_service.dart';
+import 'push_dispatch_service.dart';
 
 class NotificationService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _collection = 'notifications';
   final ClassService _classService = ClassService();
   final UserService _userService = UserService();
+
+  Future<void> _dispatchPushForNotification({
+    required String notificationId,
+    required NotificationModel notification,
+  }) async {
+    await PushDispatchService.instance.tryDispatchRemotePush(
+      notificationId: notificationId,
+      userId: notification.userId,
+      title: notification.title,
+      body: notification.body,
+      type: notification.type,
+      priority: notification.priority,
+      actionType: notification.actionType,
+      assignmentId: notification.assignmentId,
+      metadata: notification.metadata,
+    );
+  }
+
+  Future<void> createExamNotifications(ExamModel exam) async {
+    try {
+      List<String> studentIds = [];
+      for (String classId in exam.classIds) {
+        final classModel = await _classService.getClassById(classId);
+        if (classModel == null) continue;
+        for (String studentCode in classModel.studentCodes) {
+          final student = await _userService.getUserByStudentCode(studentCode);
+          if (student != null && !studentIds.contains(student.uid)) {
+            studentIds.add(student.uid);
+          }
+        }
+      }
+
+      for (final studentId in studentIds) {
+        final notification = NotificationModel(
+          id: '',
+          userId: studentId,
+          title: '📝 لديك اختبار جديد: ${exam.subject}',
+          body:
+              '${exam.title} - الموعد: ${exam.startAt.day}/${exam.startAt.month}/${exam.startAt.year} ${exam.startAt.hour}:${exam.startAt.minute.toString().padLeft(2, '0')} - يرجى عدم التأخير',
+          type: NotificationModel.typeExamNew,
+          createdAt: DateTime.now(),
+          priority: 'high',
+          actionType: 'view_exam',
+          metadata: {
+            'examId': exam.id,
+            'assessmentType': exam.assessmentType,
+            'startAt': exam.startAt.toIso8601String(),
+            'endAt': exam.endAt.toIso8601String(),
+          },
+        );
+        final docRef = await _firestore.collection(_collection).add(notification.toMap());
+        await docRef.update({'id': docRef.id});
+        await _dispatchPushForNotification(
+          notificationId: docRef.id,
+          notification: notification,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error creating exam notifications: $e');
+    }
+  }
 
   // Create notification for new assignment
   Future<void> createAssignmentNotifications(AssignmentModel assignment) async {
@@ -66,6 +129,10 @@ class NotificationService {
             .add(notification.toMap());
         await docRef.update({'id': docRef.id});
         debugPrint('✅ Created notification for student: $studentId');
+        await _dispatchPushForNotification(
+          notificationId: docRef.id,
+          notification: notification,
+        );
       }
 
       debugPrint(
@@ -85,10 +152,26 @@ class NotificationService {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .map(
-          (snapshot) => snapshot.docs
-              .map((doc) => NotificationModel.fromMap(doc.data()))
-              .toList(),
+          (snapshot) => snapshot.docs.map((doc) {
+            final data = doc.data();
+            final map = Map<String, dynamic>.from(data);
+            // دائماً استخدم معرف المستند من Firestore لضمان الحذف والسحب يعمل لكل الأدوار.
+            map['id'] = doc.id;
+            return NotificationModel.fromMap(map);
+          }).toList(),
         );
+  }
+
+  /// حذف إشعار من Firestore (مثلاً بعد سحب البطاقة).
+  Future<void> deleteNotification(String notificationId) async {
+    if (notificationId.isEmpty) return;
+    try {
+      await _firestore.collection(_collection).doc(notificationId).delete();
+      debugPrint('✅ Deleted notification $notificationId');
+    } catch (e) {
+      debugPrint('❌ Error deleting notification: $e');
+      rethrow;
+    }
   }
 
   // Mark notification as read
@@ -102,6 +185,32 @@ class NotificationService {
       debugPrint('✅ Marked notification $notificationId as read');
     } catch (e) {
       debugPrint('❌ Error marking notification as read: $e');
+    }
+  }
+
+  // Mark all unread notifications for a user as read
+  Future<void> markAllAsRead(String userId) async {
+    try {
+      final unreadSnapshot = await _firestore
+          .collection(_collection)
+          .where('userId', isEqualTo: userId)
+          .where('isRead', isEqualTo: false)
+          .get();
+
+      if (unreadSnapshot.docs.isEmpty) return;
+
+      final batch = _firestore.batch();
+      final nowIso = DateTime.now().toIso8601String();
+      for (final doc in unreadSnapshot.docs) {
+        batch.update(doc.reference, {
+          'isRead': true,
+          'readAt': nowIso,
+        });
+      }
+      await batch.commit();
+      debugPrint('✅ Marked all notifications as read for user $userId');
+    } catch (e) {
+      debugPrint('❌ Error marking all notifications as read: $e');
     }
   }
 
@@ -195,7 +304,7 @@ class NotificationService {
 
       if (studentName != null) {
         // Notification for parent
-        title = 'تنبيه: واجب غير مكتمل';
+        title = 'تنبيه لولي الأمر - الطالب $studentName';
         body =
             'الطالب $studentName لم يسلم واجب $assignmentSubject: $assignmentTitle';
       } else {
@@ -214,12 +323,17 @@ class NotificationService {
         createdAt: DateTime.now(),
         priority: 'high',
         actionType: 'view_assignment',
+        metadata: studentName != null ? {'childName': studentName} : null,
       );
 
       DocumentReference docRef = await _firestore
           .collection(_collection)
           .add(notification.toMap());
       await docRef.update({'id': docRef.id});
+      await _dispatchPushForNotification(
+        notificationId: docRef.id,
+        notification: notification,
+      );
 
       debugPrint('✅ Sent incomplete assignment notification to $studentId');
     } catch (e) {
@@ -257,6 +371,10 @@ class NotificationService {
           .collection(_collection)
           .add(notification.toMap());
       await docRef.update({'id': docRef.id});
+      await _dispatchPushForNotification(
+        notificationId: docRef.id,
+        notification: notification,
+      );
 
       debugPrint('✅ Created notification: $type for user: $userId');
     } catch (e) {
@@ -527,8 +645,8 @@ class NotificationService {
   }) async {
     await createTestNotification(
       userId: parentId,
-      title: '📘 تم إضافة واجب جديد لابنك',
-      body: '$childName - $assignmentSubject: $assignmentTitle',
+      title: '📘 واجب جديد للطالب $childName',
+      body: 'المادة: $assignmentSubject - الواجب: $assignmentTitle',
       type: NotificationModel.typeParentHomeworkNew,
       assignmentId: assignmentId,
       priority: 'default',
@@ -547,8 +665,8 @@ class NotificationService {
   }) async {
     await createTestNotification(
       userId: parentId,
-      title: '❗ لم يتم تسليم واجب اليوم',
-      body: '$childName - $assignmentSubject: $assignmentTitle',
+      title: '❗ تنبيه: $childName لم يسلم واجباً',
+      body: 'المادة: $assignmentSubject - الواجب: $assignmentTitle',
       type: NotificationModel.typeParentHomeworkMissed,
       assignmentId: assignmentId,
       priority: 'high',
@@ -568,8 +686,8 @@ class NotificationService {
   }) async {
     await createTestNotification(
       userId: parentId,
-      title: '📉 أداء ابنك يحتاج إلى دعم',
-      body: '$childName - $assignmentTitle: $grade/$totalPoints',
+      title: '📉 تنبيه أداء للطالب $childName',
+      body: '$assignmentTitle - الدرجة: $grade/$totalPoints',
       type: NotificationModel.typeParentGradeLow,
       assignmentId: assignmentId,
       priority: 'default',
@@ -593,8 +711,8 @@ class NotificationService {
   }) async {
     await createTestNotification(
       userId: parentId,
-      title: '🌱 تحسّن ملحوظ في مستوى ابنك',
-      body: '$childName - $assignmentTitle: $grade/$totalPoints',
+      title: '🌱 تحسّن واضح للطالب $childName',
+      body: '$assignmentTitle - الدرجة: $grade/$totalPoints',
       type: NotificationModel.typeParentImprovement,
       assignmentId: assignmentId,
       priority: 'default',

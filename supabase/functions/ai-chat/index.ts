@@ -1,13 +1,9 @@
 // Supabase Edge Function: استدعاء نموذج الذكاء الاصطناعي (Groq) من السيرفر
 // أضف GROQ_API_KEY في Supabase Dashboard → Project Settings → Edge Functions → Secrets
 
-declare const Deno: {
-  serve: (handler: (req: Request) => Promise<Response>) => void;
-  env: { get: (key: string) => string | undefined };
-};
-
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+const MAX_HISTORY_MESSAGES = 12;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -23,6 +19,43 @@ function jsonResponse(
     status,
     headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
+}
+
+function hasDisallowedScripts(text: string): boolean {
+  // Cyrillic + CJK ranges
+  const cyrillic = /[\u0400-\u04FF]/u;
+  const cjk = /[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
+  return cyrillic.test(text) || cjk.test(text);
+}
+
+async function callGroq(params: {
+  apiKey: string;
+  model: string;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+}): Promise<string> {
+  const response = await fetch(GROQ_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      max_tokens: 1024,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Groq API error (${response.status}): ${errText}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -61,40 +94,57 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const systemPrompt =
     typeof body.systemPrompt === "string"
       ? body.systemPrompt
-      : "أنت مساعد تعليمي مفيد وودود. تجيب بالعربية الفصحى أو العامية حسب سياق السؤال. لا تعطِ الإجابة النهائية مباشرة للتمارين، قدّم تلميحات وتوجيهاً.";
+      : "أنت مساعد تعليمي مفيد وودود. تجيب بالعربية فقط وبأحرف عربية فقط (مسموح الأرقام والرموز المعتادة). حلّل السؤال داخلياً أولاً ثم قدّم إجابة واضحة. يمكنك شرح طريقة الحل خطوة بخطوة بشكل مختصر ومباشر. إذا طلب الطالب الحل النهائي صراحةً فاعطه الحل مع شرح الفكرة.";
   const model =
     typeof body.model === "string" ? body.model : DEFAULT_MODEL;
 
+  const historyRaw = Array.isArray(body.history) ? body.history : [];
+  const history = historyRaw
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const role = (item as Record<string, unknown>).role;
+      const content = (item as Record<string, unknown>).content;
+      if (
+        (role === "user" || role === "assistant") &&
+        typeof content === "string" &&
+        content.trim() !== ""
+      ) {
+        return { role, content: content.trim() };
+      }
+      return null;
+    })
+    .filter((item): item is { role: "user" | "assistant"; content: string } => item !== null)
+    .slice(-MAX_HISTORY_MESSAGES);
+
   try {
-    const response = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt },
-        ],
-        max_tokens: 1024,
-        temperature: 0.7,
-      }),
+    let content = await callGroq({
+      apiKey,
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...history,
+        { role: "user", content: prompt },
+      ],
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return jsonResponse(
-        { error: "Groq API error", details: errText },
-        response.status
-      );
+    // Safety pass: if model leaked Cyrillic/CJK, force Arabic rewrite.
+    if (hasDisallowedScripts(content)) {
+      const rewritePrompt =
+        "أعد صياغة النص التالي بالعربية فقط وبأحرف عربية فقط، دون أي كلمات روسية أو صينية، مع الحفاظ على نفس المعنى:\n\n" +
+        content;
+      content = await callGroq({
+        apiKey,
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "أنت مدقق لغة. أخرج النص بالعربية فقط وبأحرف عربية فقط (مسموح الأرقام والرموز). لا تضف شروحات.",
+          },
+          { role: "user", content: rewritePrompt },
+        ],
+      });
     }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content ?? "";
 
     return jsonResponse({ text: content });
   } catch (e) {

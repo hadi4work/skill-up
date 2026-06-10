@@ -9,8 +9,8 @@ import '../../services/storage_service.dart';
 import '../../services/user_service.dart';
 import '../../models/assignment_model.dart';
 import '../../models/submission_model.dart';
+import '../../services/student_content_seen_service.dart';
 import '../image_viewer_screen.dart';
-import '../ai_assistant_screen.dart';
 
 class SubmitAssignmentScreen extends StatefulWidget {
   final AssignmentModel assignment;
@@ -29,15 +29,31 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
   final StorageService _storageService = StorageService();
   final UserService _userService = UserService();
   final ImagePicker _picker = ImagePicker();
-  
+
   File? _solutionImage;
   bool _isLoading = false;
   SubmissionModel? _existingSubmission;
+
+  static const double _thumbHeight = 168;
+
+  /// انتهى الموعد النهائي (لا تسليم جديد ولا تحديث للحل).
+  bool get _isPastDeadline =>
+      widget.assignment.deadline.isBefore(DateTime.now());
+
+  bool get _canEditSolution =>
+      (_existingSubmission == null || !_existingSubmission!.isGraded) &&
+      !_isPastDeadline;
 
   @override
   void initState() {
     super.initState();
     _checkExistingSubmission();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final uid = Provider.of<AuthProvider>(context, listen: false).user?.uid;
+      if (uid != null) {
+        StudentContentSeenService.markAssignmentSeen(uid, widget.assignment.id);
+      }
+    });
   }
 
   Future<void> _checkExistingSubmission() async {
@@ -62,6 +78,22 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
   }
 
   Future<void> _pickImage() async {
+    if (!_canEditSolution) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _existingSubmission?.isGraded == true
+                  ? 'لا يمكن تعديل الحل بعد تصحيح المعلم'
+                  : 'انتهى الموعد النهائي ولا يمكن تعديل الحل',
+              style: GoogleFonts.cairo(),
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
     try {
       final XFile? image = await _picker.pickImage(
         source: ImageSource.camera,
@@ -96,9 +128,34 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
       return;
     }
 
-    // Check if submission already exists
+    if (_isPastDeadline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'انتهى الموعد النهائي ولا يمكن إرسال أو تحديث الحل',
+            style: GoogleFonts.cairo(),
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     if (_existingSubmission != null) {
-      // Update existing submission
+      if (!_canEditSolution) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _existingSubmission!.isGraded
+                  ? 'لا يمكن تعديل الحل بعد تصحيح المعلم'
+                  : 'انتهى الموعد النهائي ولا يمكن تحديث الحل',
+              style: GoogleFonts.cairo(),
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
       await _updateSubmission();
       return;
     }
@@ -118,7 +175,6 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
     }
 
     try {
-      // Create submission first to get ID
       SubmissionModel newSubmission = SubmissionModel(
         id: '',
         assignmentId: widget.assignment.id,
@@ -126,26 +182,22 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
         studentCode: user.studentCode!,
         submissionImageUrl: '',
         submittedAt: DateTime.now(),
-        xpEarned: 5, // 5 XP for submission
+        xpEarned: 5,
       );
 
       String submissionId = await _assignmentService.submitAssignment(newSubmission);
 
-      // Upload image
       String imageUrl = await _storageService.uploadSubmissionImage(
         _solutionImage!,
         submissionId,
       );
 
-      // Update submission with image URL
       await _assignmentService.updateSubmission(submissionId, {
         'submissionImageUrl': imageUrl,
       });
 
-      // Add 5 XP to student for submission (only for new submissions)
       await _userService.addXP(user.uid, 5);
-      
-      // Refresh user profile in AuthProvider to update XP/Level
+
       await authProvider.refreshUser();
 
       if (mounted) {
@@ -182,39 +234,58 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
     if (_solutionImage == null || _existingSubmission == null) {
       return;
     }
+    if (_isPastDeadline) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'انتهى الموعد النهائي ولا يمكن تحديث الحل',
+              style: GoogleFonts.cairo(),
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+    if (_existingSubmission!.isGraded) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'لا يمكن تعديل الحل بعد تصحيح المعلم',
+              style: GoogleFonts.cairo(),
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
 
     setState(() {
       _isLoading = true;
     });
 
     try {
-      // Delete old image from storage if exists
       if (_existingSubmission!.submissionImageUrl.isNotEmpty) {
         try {
           await _storageService.deleteImage(_existingSubmission!.submissionImageUrl);
         } catch (e) {
           debugPrint('Error deleting old image: $e');
-          // Continue even if deletion fails
         }
       }
 
-      // Upload new image
       String imageUrl = await _storageService.uploadSubmissionImage(
         _solutionImage!,
         _existingSubmission!.id,
       );
 
-      // Update submission with new image URL and update submittedAt
       await _assignmentService.updateSubmission(_existingSubmission!.id, {
         'submissionImageUrl': imageUrl,
         'submittedAt': DateTime.now().toIso8601String(),
-        // Reset grading status if it was graded (allow re-submission after grading)
-        'isGraded': false,
-        'grade': null,
-        'gradedAt': null,
       });
 
-      // Refresh existing submission
       await _checkExistingSubmission();
 
       if (mounted) {
@@ -247,8 +318,90 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
     }
   }
 
+  void _openAssignmentImage() {
+    if (widget.assignment.assignmentImageUrl.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) => ImageViewerScreen(
+          imageUrl: widget.assignment.assignmentImageUrl,
+          title: widget.assignment.title,
+          aiExtractSubject: widget.assignment.subject,
+          aiExtractAssignmentTitle: widget.assignment.title,
+        ),
+      ),
+    );
+  }
+
+  void _openSolutionImage(String url) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) => ImageViewerScreen(
+          imageUrl: url,
+          title: 'صورة الحل',
+        ),
+      ),
+    );
+  }
+
+  void _openLocalSolutionPreview() {
+    if (_solutionImage == null) return;
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            leading: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              'معاينة الحل',
+              style: GoogleFonts.cairo(color: Colors.white, fontSize: 18),
+            ),
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              minScale: 0.5,
+              maxScale: 4.0,
+              child: Image.file(_solutionImage!, fit: BoxFit.contain),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _thumbShell({required VoidCallback? onTap, required Widget child}) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          height: _thumbHeight,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: child,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasAssignmentImage = widget.assignment.assignmentImageUrl.isNotEmpty;
+    final solutionUrl = _existingSubmission?.submissionImageUrl ?? '';
+    final hasSavedSolution = solutionUrl.isNotEmpty;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -269,11 +422,10 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(20.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Assignment Info
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -310,8 +462,35 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
-              // Existing Submission Info
+              if (_isPastDeadline) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFDE68A)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.schedule, color: Color(0xFFB45309), size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'انتهى الموعد النهائي لهذا الواجب — يمكنك عرض الأسئلات والحل المُرسل فقط دون تعديل.',
+                          style: GoogleFonts.cairo(
+                            fontSize: 13,
+                            color: const Color(0xFF92400E),
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 20),
               if (_existingSubmission != null) ...[
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -371,201 +550,214 @@ class _SubmitAssignmentScreenState extends State<SubmitAssignmentScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
               ],
-              // Assignment Image (Questions)
-              if (widget.assignment.assignmentImageUrl.isNotEmpty) ...[
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'صورة الأسئلة',
-                      style: GoogleFonts.cairo(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: const Color(0xFF111827),
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => AIAssistantScreen(
-                              subject: widget.assignment.subject,
-                              question: widget.assignment.title +
-                                  (widget.assignment.notes != null
-                                      ? '\n${widget.assignment.notes}'
-                                      : ''),
-                            ),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.lightbulb_outline, size: 20),
-                      label: Text(
-                        'تلميح من الذكاء الاصطناعي',
-                        style: GoogleFonts.cairo(fontSize: 13),
-                      ),
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFF7C3AED),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ImageViewerScreen(
-                          imageUrl: widget.assignment.assignmentImageUrl,
-                          title: widget.assignment.title,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    height: 200,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.network(
-                        widget.assignment.assignmentImageUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Center(
-                            child: Icon(Icons.image, size: 48, color: Colors.grey[400]),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-              ],
-              // Solution Image
               Text(
-                _existingSubmission != null ? 'صورة الحل الحالية' : 'صورة الحل',
+                'الصور',
                 style: GoogleFonts.cairo(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                   color: const Color(0xFF111827),
                 ),
               ),
-              const SizedBox(height: 12),
-              // Show existing submission image if available
-              if (_existingSubmission != null &&
-                  _existingSubmission!.submissionImageUrl.isNotEmpty &&
-                  _solutionImage == null) ...[
-                GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ImageViewerScreen(
-                          imageUrl: _existingSubmission!.submissionImageUrl,
-                          title: 'الحل الحالي',
-                        ),
-                      ),
-                    );
-                  },
-                  child: Container(
-                    height: 300,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.network(
-                        _existingSubmission!.submissionImageUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Center(
-                            child: Icon(Icons.image, size: 48, color: Colors.grey[400]),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
+              const SizedBox(height: 6),
+              Text(
+                'اضغط على أي معاينة لفتحها بالحجم الكامل. لاستخراج نص الأسئلة استخدم «استخراج النص» من شاشة العرض.',
+                style: GoogleFonts.cairo(
+                  fontSize: 12,
+                  color: const Color(0xFF6B7280),
+                  height: 1.35,
                 ),
-                const SizedBox(height: 12),
+              ),
+              const SizedBox(height: 12),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'أسئلة الواجب',
+                            style: GoogleFonts.cairo(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF374151),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _thumbShell(
+                            onTap: hasAssignmentImage ? _openAssignmentImage : null,
+                            child: hasAssignmentImage
+                                ? Image.network(
+                                    widget.assignment.assignmentImageUrl,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => Center(
+                                      child: Icon(Icons.image, size: 40, color: Colors.grey[400]),
+                                    ),
+                                  )
+                                : Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: Text(
+                                        'لا توجد صورة',
+                                        textAlign: TextAlign.center,
+                                        style: GoogleFonts.cairo(
+                                          fontSize: 12,
+                                          color: const Color(0xFF9CA3AF),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _existingSubmission != null ? 'حلك' : 'معاينة الحل',
+                            style: GoogleFonts.cairo(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF374151),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _thumbShell(
+                            onTap: _solutionImage != null
+                                ? _openLocalSolutionPreview
+                                : (hasSavedSolution
+                                    ? () => _openSolutionImage(solutionUrl)
+                                    : null),
+                            child: _solutionImage != null
+                                ? Image.file(
+                                    _solutionImage!,
+                                    fit: BoxFit.cover,
+                                  )
+                                : hasSavedSolution
+                                    ? Image.network(
+                                        solutionUrl,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) => Center(
+                                          child: Icon(Icons.image, size: 40, color: Colors.grey[400]),
+                                        ),
+                                      )
+                                    : Center(
+                                        child: Icon(
+                                          Icons.add_photo_alternate_outlined,
+                                          size: 40,
+                                          color: Colors.grey[400],
+                                        ),
+                                      ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasSavedSolution &&
+                  _solutionImage == null &&
+                  _canEditSolution) ...[
+                const SizedBox(height: 8),
                 Text(
-                  'اضغط على الصورة أعلاه لعرضها بالحجم الكامل، أو التقط صورة جديدة لتحديث الحل',
+                  'استخدم الزر أدناه لتصوير حل جديد وتحديث التسليم.',
                   style: GoogleFonts.cairo(
-                    fontSize: 12,
+                    fontSize: 11,
                     color: const Color(0xFF6B7280),
                     fontStyle: FontStyle.italic,
                   ),
-                  textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 12),
               ],
-              GestureDetector(
-                onTap: _pickImage,
-                child: Container(
-                  height: 300,
+              if (_existingSubmission != null &&
+                  _existingSubmission!.isGraded) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.grey[300]!,
-                      width: 2,
-                      style: BorderStyle.solid,
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Text(
+                    'تم قفل الحل بعد تصحيح المعلم.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.cairo(
+                      fontSize: 13,
+                      color: const Color(0xFF6B7280),
                     ),
                   ),
-                  child: _solutionImage != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.file(
-                            _solutionImage!,
-                            fit: BoxFit.cover,
-                          ),
-                        )
-                      : Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.camera_alt,
-                              size: 48,
-                              color: Color(0xFF6B7280),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _existingSubmission != null
-                                  ? 'اضغط للتقاط صورة جديدة لتحديث الحل'
-                                  : 'اضغط للتقاط صورة الحل',
-                              style: GoogleFonts.cairo(
-                                fontSize: 14,
-                                color: const Color(0xFF6B7280),
-                              ),
-                            ),
-                          ],
-                        ),
                 ),
-              ),
-              const SizedBox(height: 32),
-              // Submit/Update Button
-              if (_existingSubmission == null || !_existingSubmission!.isGraded)
+              ],
+              if (_canEditSolution) ...[
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _pickImage,
+                      icon: const Icon(Icons.camera_alt, size: 20),
+                      label: Text(
+                        _existingSubmission != null
+                            ? 'تغيير صورة الحل'
+                            : 'التقاط صورة الحل',
+                        style: GoogleFonts.cairo(fontWeight: FontWeight.w600),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF2563EB),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        side: const BorderSide(color: Color(0xFF2563EB)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                    if (_solutionImage != null)
+                      TextButton.icon(
+                        onPressed: () => setState(() => _solutionImage = null),
+                        icon: const Icon(Icons.close, size: 18),
+                        label: Text(
+                          'إزالة المعاينة',
+                          style: GoogleFonts.cairo(),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 24),
+              if (_canEditSolution &&
+                  (_existingSubmission == null || !_existingSubmission!.isGraded))
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _submitAssignment,
+                    onPressed:
+                        (_isLoading || _solutionImage == null) ? null : _submitAssignment,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _existingSubmission != null
                           ? const Color(0xFF7C3AED)
                           : const Color(0xFF2563EB),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
                     child: _isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
                         : Text(
                             _existingSubmission != null
                                 ? 'تحديث الحل'

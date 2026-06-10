@@ -175,6 +175,14 @@ class AssignmentService {
   // For updates, use updateSubmission instead
   Future<String> submitAssignment(SubmissionModel submission) async {
     try {
+      final assignmentCheck = await getAssignmentById(submission.assignmentId);
+      if (assignmentCheck == null) {
+        throw 'الواجب غير موجود';
+      }
+      if (DateTime.now().isAfter(assignmentCheck.deadline)) {
+        throw 'انتهى الموعد النهائي لهذا الواجب ولا يمكن تسليم حل جديد';
+      }
+
       // Check if submission already exists
       final existingSubmission = await getStudentSubmission(
         submission.assignmentId,
@@ -190,42 +198,36 @@ class AssignmentService {
           .add(submission.toMap());
       await docRef.update({'id': docRef.id});
 
-      // Get assignment details
-      final assignment = await getAssignmentById(submission.assignmentId);
-      if (assignment != null) {
-        // Send notification to student
-        await _notificationService.sendSubmissionReceivedNotification(
-          studentId: submission.studentId,
+      final assignment = assignmentCheck;
+      await _notificationService.sendSubmissionReceivedNotification(
+        studentId: submission.studentId,
+        assignmentId: submission.assignmentId,
+        assignmentTitle: assignment.title,
+      );
+
+      final isLate = submission.submittedAt.isAfter(assignment.deadline);
+      final student = await _userService.getUserProfile(submission.studentId);
+      if (student != null) {
+        await _notificationService.sendStudentSubmittedNotification(
+          teacherId: assignment.teacherId,
+          studentName: student.name,
           assignmentId: submission.assignmentId,
           assignmentTitle: assignment.title,
+          isLate: isLate,
         );
+      }
 
-        // Send notification to teacher
-        final isLate = submission.submittedAt.isAfter(assignment.deadline);
-        final student = await _userService.getUserProfile(submission.studentId);
-        if (student != null) {
-          await _notificationService.sendStudentSubmittedNotification(
-            teacherId: assignment.teacherId,
-            studentName: student.name,
-            assignmentId: submission.assignmentId,
-            assignmentTitle: assignment.title,
-            isLate: isLate,
-          );
-        }
-
-        // Check if all students submitted
-        final allSubmissions = await getAssignmentSubmissions(
-          submission.assignmentId,
+      final allSubmissions = await getAssignmentSubmissions(
+        submission.assignmentId,
+      );
+      final totalStudents = await _getTotalStudentsCount(assignment.classIds);
+      if (allSubmissions.length >= totalStudents) {
+        await _notificationService.sendAllSubmittedNotification(
+          teacherId: assignment.teacherId,
+          assignmentId: submission.assignmentId,
+          assignmentTitle: assignment.title,
+          totalStudents: totalStudents,
         );
-        final totalStudents = await _getTotalStudentsCount(assignment.classIds);
-        if (allSubmissions.length >= totalStudents) {
-          await _notificationService.sendAllSubmittedNotification(
-            teacherId: assignment.teacherId,
-            assignmentId: submission.assignmentId,
-            assignmentTitle: assignment.title,
-            totalStudents: totalStudents,
-          );
-        }
       }
 
       return docRef.id;
@@ -253,10 +255,43 @@ class AssignmentService {
     Map<String, dynamic> data,
   ) async {
     try {
-      await _firestore
+      final docRef = _firestore
           .collection(_submissionsCollection)
-          .doc(submissionId)
-          .update(data);
+          .doc(submissionId);
+      final snap = await docRef.get();
+      if (!snap.exists) {
+        throw 'الحل غير موجود';
+      }
+      final graded = snap.data()?['isGraded'] == true;
+      if (graded) {
+        const blockedAfterGrade = {
+          'submissionImageUrl',
+          'submittedAt',
+          'isGraded',
+          'grade',
+          'gradedAt',
+          'xpEarned',
+        };
+        if (data.keys.any(blockedAfterGrade.contains)) {
+          throw 'لا يمكن تعديل الحل بعد تصحيح المعلم';
+        }
+      }
+
+      const imageOrTimeKeys = {'submissionImageUrl', 'submittedAt'};
+      if (data.keys.any(imageOrTimeKeys.contains)) {
+        final assignmentId = snap.data()?['assignmentId'] as String?;
+        if (assignmentId != null && assignmentId.isNotEmpty) {
+          final assignment = await getAssignmentById(assignmentId);
+          if (assignment != null &&
+              DateTime.now().isAfter(assignment.deadline)) {
+            throw 'انتهى الموعد النهائي ولا يمكن تحديث الحل';
+          }
+        }
+      }
+
+      await docRef.update(data);
+    } on String {
+      rethrow;
     } catch (e) {
       debugPrint('Error updating submission: $e');
       throw 'حدث خطأ أثناء تحديث الحل: $e';

@@ -33,6 +33,9 @@ class NotificationModel {
   static const String typeParentImprovement = 'parent_improvement';
   static const String typeClassAdded = 'class_added';
   static const String typeIncompleteAssignment = 'incomplete_assignment';
+  static const String typeExamNew = 'exam_new';
+  static const String typeExamReminder = 'exam_reminder';
+  static const String typeExamStarted = 'exam_started';
 
   NotificationModel({
     required this.id,

@@ -8,9 +8,7 @@ import '../widgets/google_button.dart';
 import '../providers/auth_provider.dart';
 import 'signup_screen.dart';
 import 'forgot_password_screen.dart';
-import 'student/student_home_screen.dart';
-import 'teacher/teacher_home_screen.dart';
-import 'parent/parent_home_screen.dart';
+import 'auth_wrapper.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -61,43 +59,11 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       } else if (success) {
-        // Wait for AuthProvider to update
-        // Wait for the state to update
-        await Future.delayed(const Duration(milliseconds: 500));
-        
         if (!mounted) return;
-        
-        // Check if user is authenticated and navigate
-        if (authProvider.isAuthenticated && authProvider.user != null) {
-          String accountType = authProvider.user!.accountType;
-          Widget homeScreen;
-          
-          switch (accountType) {
-            case 'student':
-              homeScreen = const StudentHomeScreen();
-              break;
-            case 'teacher':
-              homeScreen = const TeacherHomeScreen();
-              break;
-            case 'parent':
-              homeScreen = const ParentHomeScreen();
-              break;
-            default:
-              homeScreen = const LoginScreen();
-          }
-          
-          // Navigate to appropriate home screen
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => homeScreen),
-            (route) => false,
-          );
-        } else {
-          if (mounted) {
-            setState(() {
-              _isLoading = false;
-            });
-          }
-        }
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AuthWrapper()),
+          (route) => false,
+        );
       } else {
         if (mounted) {
           setState(() {
@@ -133,6 +99,14 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       }
+      return;
+    }
+
+    if (success && mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthWrapper()),
+        (route) => false,
+      );
     }
   }
 
@@ -159,7 +133,7 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 const SizedBox(height: 40),
                 // Logo
-                const SkillUpLogo(logoSize: 80, fontSize: 24),
+                const SkillUpLogo(logoSize: 80, fontSize: 24, showBrandName: false),
                 const SizedBox(height: 32),
                 // Title
                 Text(

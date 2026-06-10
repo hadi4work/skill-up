@@ -94,6 +94,27 @@ class AuthService {
     }
   }
 
+  // Delete current authenticated user
+  Future<String> deleteCurrentUser() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw 'المستخدم غير موجود';
+      }
+      final uid = user.uid;
+      await user.delete();
+      await _googleSignIn.signOut();
+      return uid;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'requires-recent-login') {
+        throw 'لأمان حسابك، يرجى تسجيل الدخول مجدداً ثم إعادة محاولة حذف الحساب';
+      }
+      throw _handleAuthException(e);
+    } catch (e) {
+      throw 'حدث خطأ أثناء حذف الحساب: $e';
+    }
+  }
+
   // Send password reset email
   Future<void> sendPasswordResetEmail(String email) async {
     try {

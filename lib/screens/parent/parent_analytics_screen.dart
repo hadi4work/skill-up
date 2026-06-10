@@ -21,11 +21,19 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
   List<UserModel> _children = [];
   Map<String, List<SubmissionModel>> _submissionsByChild = {};
   Map<String, List<AssignmentModel>> _assignmentsByChild = {};
+  String? _selectedChildId;
   bool _loading = true;
+  /// تتبع قائمة الأبناء المربوطة (أكواد أو uid) لإعادة التحميل عند الربط من الملف الشخصي
+  String _lastLinkedChildrenKey = '\u0000';
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final user = Provider.of<AuthProvider>(context).user;
+    final linked = user?.children ?? <String>[];
+    final key = linked.join('\x1e');
+    if (key == _lastLinkedChildrenKey) return;
+    _lastLinkedChildrenKey = key;
     _loadData();
   }
 
@@ -35,10 +43,13 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
       setState(() => _loading = false);
       return;
     }
-    final childIds = user.children;
-    if (childIds == null || childIds.isEmpty) {
+    final linkedValues = user.children;
+    if (linkedValues == null || linkedValues.isEmpty) {
       setState(() {
         _children = [];
+        _submissionsByChild = {};
+        _assignmentsByChild = {};
+        _selectedChildId = null;
         _loading = false;
       });
       return;
@@ -48,25 +59,51 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
       List<UserModel> children = [];
       final subsMap = <String, List<SubmissionModel>>{};
       final assignMap = <String, List<AssignmentModel>>{};
-      for (final id in childIds) {
-        final profile = await _userService.getUserProfile(id);
-        if (profile != null && profile.accountType == 'student') {
+      // نفس منطق parent_home_screen: children قد تكون studentCode أو uid نادراً
+      for (final value in linkedValues) {
+        try {
+          UserModel? profile = await _userService
+              .getUserProfile(value)
+              .timeout(const Duration(seconds: 10));
+          profile ??= await _userService
+              .getUserByStudentCode(value)
+              .timeout(const Duration(seconds: 10));
+          if (profile == null || profile.accountType != 'student') continue;
+
+          final uid = profile.uid;
           children.add(profile);
-          final subs = await _assignmentService.getSubmissionsByStudentId(id);
-          subsMap[id] = subs;
+          final subs =
+              await _assignmentService.getSubmissionsByStudentId(uid);
+          subsMap[uid] = subs;
           if (profile.classIds != null && profile.classIds!.isNotEmpty) {
-            final assign = await _assignmentService.getStudentAssignments(profile.classIds!);
-            assignMap[id] = assign;
+            final assign =
+                await _assignmentService.getStudentAssignments(profile.classIds!);
+            assignMap[uid] = assign;
           } else {
-            assignMap[id] = [];
+            assignMap[uid] = [];
           }
+        } catch (_) {
+          continue;
         }
       }
       if (mounted) {
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        final providerSelectedId = authProvider.parentSelectedChildId;
+        String? resolvedSelectedId;
+        if (children.isNotEmpty) {
+          resolvedSelectedId = (providerSelectedId != null &&
+                  children.any((c) => c.uid == providerSelectedId))
+              ? providerSelectedId
+              : children.first.uid;
+        }
+        if (providerSelectedId != resolvedSelectedId) {
+          await authProvider.setParentSelectedChildId(resolvedSelectedId);
+        }
         setState(() {
           _children = children;
           _submissionsByChild = subsMap;
           _assignmentsByChild = assignMap;
+          _selectedChildId = resolvedSelectedId;
           _loading = false;
         });
       }
@@ -102,12 +139,56 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'متابعة تقدّم أبنائك',
+                        'متابعة تقدّم الابن المحدد',
                         style: GoogleFonts.cairo(
                           fontSize: 14,
                           color: const Color(0xFF6B7280),
                         ),
                       ),
+                      if (_children.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: _showChildrenPicker,
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF3F4F6),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: const Color(0xFF2563EB),
+                                  child: Text(
+                                    (_selectedChild?.name.isNotEmpty ?? false)
+                                        ? _selectedChild!.name[0]
+                                        : 'ط',
+                                    style: GoogleFonts.cairo(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _selectedChild?.name ?? 'اختر الابن',
+                                    style: GoogleFonts.cairo(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF111827),
+                                    ),
+                                  ),
+                                ),
+                                const Icon(Icons.keyboard_arrow_down_rounded),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -126,7 +207,7 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
                   sliver: SliverList(
                     delegate: SliverChildListDelegate([
                       const SizedBox(height: 16),
-                      ..._children.map((child) => _buildChildCard(child)),
+                      if (_selectedChild != null) _buildChildCard(_selectedChild!),
                       const SizedBox(height: 32),
                     ]),
                   ),
@@ -135,6 +216,72 @@ class _ParentAnalyticsScreenState extends State<ParentAnalyticsScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  UserModel? get _selectedChild {
+    if (_children.isEmpty) return null;
+    if (_selectedChildId == null) return _children.first;
+    for (final child in _children) {
+      if (child.uid == _selectedChildId) return child;
+    }
+    return _children.first;
+  }
+
+  void _showChildrenPicker() {
+    if (_children.isEmpty) return;
+    showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'اختر الابن',
+                  style: GoogleFonts.cairo(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ..._children.map(
+                  (child) => ListTile(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(0xFF2563EB),
+                      child: Text(
+                        child.name.isNotEmpty ? child.name[0] : 'ط',
+                        style: GoogleFonts.cairo(color: Colors.white),
+                      ),
+                    ),
+                    title: Text(
+                      child.name,
+                      style: GoogleFonts.cairo(fontWeight: FontWeight.w700),
+                    ),
+                    trailing: child.uid == _selectedChildId
+                        ? const Icon(Icons.check_circle, color: Color(0xFF22C55E))
+                        : null,
+                    onTap: () {
+                      setState(() => _selectedChildId = child.uid);
+                      Provider.of<AuthProvider>(context, listen: false)
+                          .setParentSelectedChildId(child.uid);
+                      Navigator.pop(context);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

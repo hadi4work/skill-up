@@ -3,6 +3,22 @@ import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 import 'notification_service.dart';
 
+class MistakeTrainingSessionResult {
+  final int gainedXP;
+  final int streakDays;
+  final bool streakIncreased;
+  final int newTotalXP;
+  final int newLevel;
+
+  const MistakeTrainingSessionResult({
+    required this.gainedXP,
+    required this.streakDays,
+    required this.streakIncreased,
+    required this.newTotalXP,
+    required this.newLevel,
+  });
+}
+
 class UserService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _collection = 'users';
@@ -62,6 +78,39 @@ class UserService {
     }
   }
 
+  // Delete user profile with relation cleanup
+  Future<void> deleteUserProfileAndRelations(UserModel user) async {
+    try {
+      final usersRef = _firestore.collection(_collection);
+
+      if (user.accountType == 'student') {
+        // If student has a parent, remove student code from parent's children list.
+        if (user.parentId != null && user.parentId!.isNotEmpty) {
+          final code = user.studentCode;
+          if (code != null && code.isNotEmpty) {
+            await usersRef.doc(user.parentId!).update({
+              'children': FieldValue.arrayRemove([code]),
+            }).catchError((_) {});
+          }
+        }
+      } else if (user.accountType == 'parent') {
+        // Unlink all linked children from this parent.
+        for (final code in (user.children ?? <String>[])) {
+          try {
+            final student = await getUserByStudentCode(code);
+            if (student != null && student.parentId == user.uid) {
+              await usersRef.doc(student.uid).update({'parentId': null});
+            }
+          } catch (_) {}
+        }
+      }
+
+      await usersRef.doc(user.uid).delete();
+    } catch (e) {
+      throw 'حدث خطأ أثناء حذف بيانات الحساب: $e';
+    }
+  }
+
   // Add XP to student and update level
   Future<void> addXP(String uid, int xpToAdd) async {
     try {
@@ -98,6 +147,172 @@ class UserService {
     } catch (e) {
       debugPrint('❌ Error adding XP: $e');
       throw 'حدث خطأ أثناء إضافة النقاط: $e';
+    }
+  }
+
+  Future<MistakeTrainingSessionResult> recordMistakeTrainingSession({
+    required String uid,
+    required int totalQuestions,
+    required int correctAnswers,
+  }) async {
+    try {
+      final user = await getUserProfile(uid);
+      if (user == null) throw 'المستخدم غير موجود';
+
+      final int safeTotal = totalQuestions <= 0 ? 1 : totalQuestions;
+      final int safeCorrect = correctAnswers.clamp(0, safeTotal);
+      final double accuracy = safeCorrect / safeTotal;
+      final int gainedXP = (5 + (safeCorrect * 2) + (accuracy >= 0.8 ? 3 : 0)).clamp(5, 40);
+
+      final docRef = _firestore.collection(_collection).doc(uid);
+      final doc = await docRef.get();
+      final data = doc.data() ?? <String, dynamic>{};
+
+      final DateTime now = DateTime.now();
+      final DateTime today = DateTime(now.year, now.month, now.day);
+      final DateTime? lastDate = _parseDateOnly(data['mistakeTrainingLastDate']);
+      int streak = (data['mistakeTrainingStreakDays'] as num?)?.toInt() ?? 0;
+      bool streakIncreased = false;
+
+      if (lastDate == null) {
+        streak = 1;
+        streakIncreased = true;
+      } else {
+        final daysDiff = today.difference(lastDate).inDays;
+        if (daysDiff == 0) {
+          // نفس اليوم: لا زيادة ولا تصفير
+        } else if (daysDiff == 1) {
+          streak += 1;
+          streakIncreased = true;
+        } else {
+          streak = 1;
+          streakIncreased = true;
+        }
+      }
+
+      final int newXP = user.xp + gainedXP;
+      final int newLevel = user.calculateLevel(newXP);
+
+      await docRef.update({
+        'xp': newXP,
+        'level': newLevel,
+        'mistakeTrainingStreakDays': streak,
+        'mistakeTrainingLastDate': today.toIso8601String(),
+        'mistakeTrainingSessionsCount': FieldValue.increment(1),
+        'mistakeTrainingTotalCorrect': FieldValue.increment(safeCorrect),
+        'mistakeTrainingTotalQuestions': FieldValue.increment(safeTotal),
+      });
+
+      if (newLevel > user.level) {
+        final notificationService = NotificationService();
+        await notificationService.sendLevelUpNotification(
+          studentId: uid,
+          newLevel: newLevel,
+        );
+      }
+
+      return MistakeTrainingSessionResult(
+        gainedXP: gainedXP,
+        streakDays: streak,
+        streakIncreased: streakIncreased,
+        newTotalXP: newXP,
+        newLevel: newLevel,
+      );
+    } catch (e) {
+      debugPrint('❌ Error recording mistake training session: $e');
+      throw 'حدث خطأ أثناء حفظ جلسة التدريب: $e';
+    }
+  }
+
+  /// قائمة عناصر تحتاج مراجعة (تتقل عند نجاح التدريب على كل عنصر).
+  Future<List<Map<String, dynamic>>> getMistakeTrainingPending(String uid) async {
+    final snap = await _firestore.collection(_collection).doc(uid).get();
+    final raw = snap.data()?['mistakeTrainingPending'];
+    if (raw is! List) return [];
+    return raw
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .where((m) => (m['id'] ?? '').toString().isNotEmpty)
+        .toList();
+  }
+
+  /// مفاتيح عناصر أتقنها الطالب في التدريب — لا تُعاد إضافتها من [discover] بعد تسجيل الخروج/المزامنة.
+  Future<Set<String>> getMistakeTrainingMasteredIds(String uid) async {
+    final snap = await _firestore.collection(_collection).doc(uid).get();
+    final raw = snap.data()?['mistakeTrainingMasteredIds'];
+    if (raw is! List) return {};
+    return raw.map((e) => e.toString()).where((s) => s.isNotEmpty).toSet();
+  }
+
+  /// دمج اكتشافات جديدة مع القائمة المحفوظة (بدون تكرار id). يبقي قائمة [mistakeTrainingPending]
+  /// متسقة مع [mistakeTrainingMasteredIds] ولا يعيد العناصر المُتقنة رغم بقاء الخطأ في سجل الاختبار.
+  Future<void> syncMistakeTrainingPending(
+    String uid,
+    List<Map<String, dynamic>> discovered,
+  ) async {
+    final ref = _firestore.collection(_collection).doc(uid);
+    await _firestore.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+      final masteredRaw = data['mistakeTrainingMasteredIds'];
+      final mastered = masteredRaw is List
+          ? masteredRaw.map((e) => e.toString()).where((s) => s.isNotEmpty).toSet()
+          : <String>{};
+
+      final existingRaw = data['mistakeTrainingPending'];
+      var existing = existingRaw is List
+          ? existingRaw
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .where((m) {
+                final id = m['id']?.toString();
+                return id != null && id.isNotEmpty && !mastered.contains(id);
+              })
+              .toList()
+          : <Map<String, dynamic>>[];
+
+      final ids = existing.map((e) => e['id']?.toString()).whereType<String>().toSet();
+
+      for (final d in discovered) {
+        final id = d['id']?.toString();
+        if (id == null || id.isEmpty || mastered.contains(id)) continue;
+        if (ids.contains(id)) continue;
+        existing.add(Map<String, dynamic>.from(d));
+        ids.add(id);
+      }
+
+      tx.update(ref, {'mistakeTrainingPending': existing});
+    });
+  }
+
+  /// إزالة عناصر أتقنها الطالب في جلسة التدريب وتسجيلها حتى لا تُستعاد من الاكتشاف لاحقاً.
+  Future<void> removeMistakeTrainingResolved(String uid, List<String> resolvedIds) async {
+    if (resolvedIds.isEmpty) return;
+    final idsUnion = resolvedIds.toSet().toList();
+    final ref = _firestore.collection(_collection).doc(uid);
+    await _firestore.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) return;
+      final removeSet = idsUnion.toSet();
+      final existingRaw = snap.data()?['mistakeTrainingPending'];
+      final existing = existingRaw is List
+          ? existingRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+          : <Map<String, dynamic>>[];
+      final filtered =
+          existing.where((e) => !removeSet.contains(e['id']?.toString())).toList();
+      tx.update(ref, {
+        'mistakeTrainingPending': filtered,
+        'mistakeTrainingMasteredIds': FieldValue.arrayUnion(idsUnion),
+      });
+    });
+  }
+
+  DateTime? _parseDateOnly(dynamic value) {
+    if (value == null) return null;
+    try {
+      final d = DateTime.parse(value.toString());
+      return DateTime(d.year, d.month, d.day);
+    } catch (_) {
+      return null;
     }
   }
 

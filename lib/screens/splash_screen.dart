@@ -43,14 +43,14 @@ class _SplashScreenState extends State<SplashScreen> {
             children: [
               const Spacer(flex: 2),
               ClipRRect(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(28),
                 child: Image.asset(
-                  'assets/images/skillup_logo.jpg',
-                  width: 180,
-                  height: 180,
-                  fit: BoxFit.cover,
+                  'assets/images/icon.png',
+                  width: 200,
+                  height: 200,
+                  fit: BoxFit.contain,
                   errorBuilder: (_, __, ___) => Icon(
-                    Icons.school,
+                    Icons.smart_toy_outlined,
                     size: 120,
                     color: Colors.white.withValues(alpha: 0.9),
                   ),

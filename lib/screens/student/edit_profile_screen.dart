@@ -17,6 +17,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _nameController = TextEditingController();
   bool _isLoading = false;
   String? _profileImageUrl;
+  /// ذكر / أنثى — للمعلم فقط
+  String? _selectedGender;
+  bool _isTeacher = false;
 
   @override
   void initState() {
@@ -26,6 +29,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (user != null) {
       _nameController.text = user.name;
       _profileImageUrl = user.profileImage;
+      _isTeacher = user.accountType == 'teacher';
+      if (_isTeacher) {
+        _selectedGender = user.gender;
+      }
     }
   }
 
@@ -62,11 +69,28 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         return;
       }
 
+      if (_isTeacher && _selectedGender == null) {
+        setState(() => _isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('يرجى تحديد الجنس', style: GoogleFonts.cairo()),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
       try {
         // Update user profile in Firestore
         Map<String, dynamic> updateData = {
           'name': _nameController.text.trim(),
         };
+
+        if (user.accountType == 'teacher' && _selectedGender != null) {
+          updateData['gender'] = _selectedGender;
+        }
 
         if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty) {
           updateData['profileImage'] = _profileImageUrl;
@@ -255,6 +279,40 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     return null;
                   },
                 ),
+                if (_isTeacher) ...[
+                  const SizedBox(height: 24),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'الجنس',
+                      style: GoogleFonts.cairo(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF111827),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _genderChip(
+                          label: 'ذكر',
+                          value: 'male',
+                          selected: _selectedGender == 'male',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _genderChip(
+                          label: 'أنثى',
+                          value: 'female',
+                          selected: _selectedGender == 'female',
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 32),
                 // Update button
                 GradientButton(
@@ -265,6 +323,41 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 ),
                 const SizedBox(height: 24),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _genderChip({
+    required String label,
+    required String value,
+    required bool selected,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _isLoading ? null : () => setState(() => _selectedGender = value),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFEEF2FF) : Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? const Color(0xFF6366F1) : Colors.grey.shade300,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: GoogleFonts.cairo(
+                fontSize: 15,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? const Color(0xFF3730A3) : Colors.black87,
+              ),
             ),
           ),
         ),

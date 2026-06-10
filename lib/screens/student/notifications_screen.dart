@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../services/notification_service.dart';
 import '../../models/notification_model.dart';
 import 'student_assignments_screen.dart';
+import '../../widgets/swipe_to_delete_notification.dart';
 
 class StudentNotificationsScreen extends StatefulWidget {
   const StudentNotificationsScreen({super.key});
@@ -16,6 +17,8 @@ class StudentNotificationsScreen extends StatefulWidget {
 class _StudentNotificationsScreenState extends State<StudentNotificationsScreen> {
   final NotificationService _notificationService = NotificationService();
   Stream<List<NotificationModel>>? _notificationsStream;
+  bool _markingAll = false;
+  final Set<String> _pendingDeletedNotificationIds = {};
 
   @override
   void initState() {
@@ -97,6 +100,44 @@ class _StudentNotificationsScreenState extends State<StudentNotificationsScreen>
             color: const Color(0xFF111827),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: _markingAll
+                ? null
+                : () async {
+                    setState(() => _markingAll = true);
+                    await _notificationService.markAllAsRead(userId);
+                    if (mounted) {
+                      setState(() => _markingAll = false);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'تم تحديد الكل كمقروء',
+                            style: GoogleFonts.cairo(),
+                          ),
+                        ),
+                      );
+                    }
+                  },
+            child: _markingAll
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  )
+                : Text(
+                    'تحديد الكل كمقروء',
+                    style: GoogleFonts.cairo(
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF2563EB),
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refreshNotifications,
@@ -131,8 +172,11 @@ class _StudentNotificationsScreenState extends State<StudentNotificationsScreen>
           }
 
           final notifications = snapshot.data ?? [];
+          final visible = notifications
+              .where((n) => !_pendingDeletedNotificationIds.contains(n.id))
+              .toList();
 
-          if (notifications.isEmpty) {
+          if (visible.isEmpty) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -162,9 +206,9 @@ class _StudentNotificationsScreenState extends State<StudentNotificationsScreen>
           return ListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(16),
-            itemCount: notifications.length,
+            itemCount: visible.length,
             itemBuilder: (context, index) {
-              return _buildNotificationCard(notifications[index]);
+              return _buildNotificationCard(visible[index]);
             },
           );
           },
@@ -174,100 +218,112 @@ class _StudentNotificationsScreenState extends State<StudentNotificationsScreen>
   }
 
   Widget _buildNotificationCard(NotificationModel notification) {
-    return Container(
-      key: ValueKey(notification.id),
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: notification.isRead ? Colors.white : Colors.blue[50],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: notification.isRead ? Colors.grey[200]! : Colors.blue[200]!,
-          width: notification.isRead ? 1 : 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
+    return SwipeToDeleteNotification(
+      notificationId: notification.id,
+      onDismissed: () {
+        setState(() => _pendingDeletedNotificationIds.add(notification.id));
+        _notificationService.deleteNotification(notification.id).catchError((_) {
+          if (mounted) {
+            setState(() => _pendingDeletedNotificationIds.remove(notification.id));
+          }
+        });
+      },
+      child: Container(
+        key: ValueKey(notification.id),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: notification.isRead ? Colors.white : Colors.blue[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: notification.isRead ? Colors.grey[200]! : Colors.blue[200]!,
+            width: notification.isRead ? 1 : 1.5,
           ),
-        ],
-      ),
-      child: InkWell(
-        onTap: () async {
-          if (!notification.isRead) {
-            await _notificationService.markAsRead(notification.id);
-          }
-          
-          if (notification.type == 'assignment' && notification.assignmentId != null) {
-            if (mounted) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const StudentAssignmentsScreen(),
-                ),
-              );
-            }
-          }
-        },
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2563EB).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.assignment,
-                color: Color(0xFF2563EB),
-                size: 24,
-              ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 5,
+              offset: const Offset(0, 2),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    notification.title,
-                    style: GoogleFonts.cairo(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF111827),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    notification.body,
-                    style: GoogleFonts.cairo(
-                      fontSize: 14,
-                      color: const Color(0xFF6B7280),
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatDate(notification.createdAt),
-                    style: GoogleFonts.cairo(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (!notification.isRead)
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2563EB),
-                  shape: BoxShape.circle,
-                ),
-              ),
           ],
+        ),
+        child: InkWell(
+          onTap: () async {
+            if (!notification.isRead) {
+              await _notificationService.markAsRead(notification.id);
+            }
+
+            if (notification.type == 'assignment' &&
+                notification.assignmentId != null) {
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const StudentAssignmentsScreen(),
+                  ),
+                );
+              }
+            }
+          },
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.assignment,
+                  color: Color(0xFF2563EB),
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      notification.title,
+                      style: GoogleFonts.cairo(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF111827),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      notification.body,
+                      style: GoogleFonts.cairo(
+                        fontSize: 14,
+                        color: const Color(0xFF6B7280),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatDate(notification.createdAt),
+                      style: GoogleFonts.cairo(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!notification.isRead)
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF2563EB),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

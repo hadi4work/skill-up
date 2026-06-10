@@ -5,12 +5,14 @@ class SkillUpLogo extends StatelessWidget {
   final double? logoSize;
   final double? fontSize;
   final String? imagePath;
+  final bool showBrandName;
 
   const SkillUpLogo({
     super.key,
     this.logoSize = 80,
     this.fontSize = 24,
     this.imagePath,
+    this.showBrandName = true,
   });
 
   @override
@@ -22,7 +24,7 @@ class SkillUpLogo extends StatelessWidget {
           width: logoSize,
           height: logoSize,
           child: Image.asset(
-            imagePath ?? 'assets/images/skillup_logo.jpg',
+            imagePath ?? 'assets/images/icon.png',
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
               // Fallback إذا لم توجد الصورة
@@ -46,30 +48,32 @@ class SkillUpLogo extends StatelessWidget {
             },
           ),
         ),
-        const SizedBox(height: 12),
-        // Brand name
-        RichText(
-          text: TextSpan(
-            children: [
-              TextSpan(
-                text: 'SkillUp',
-                style: GoogleFonts.cairo(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blue[600],
+        if (showBrandName) ...[
+          const SizedBox(height: 12),
+          // Brand name
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: 'SkillUp',
+                  style: GoogleFonts.cairo(
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[600],
+                  ),
                 ),
-              ),
-              TextSpan(
-                text: 'AI',
-                style: GoogleFonts.cairo(
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF4CAF50),
+                TextSpan(
+                  text: 'AI',
+                  style: GoogleFonts.cairo(
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF4CAF50),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }

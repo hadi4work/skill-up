@@ -6,4 +6,11 @@ class SupabaseConfig {
 
   /// اسم الـ bucket في Supabase Storage (يجب إنشاؤه كـ Public)
   static const String storageBucket = 'images';
+
+  /// سر مشترك مع دالة Edge `send-fcm-push` (نفس القيمة في Supabase Secrets).
+  /// التشغيل: `flutter run --dart-define=PUSH_DISPATCH_SECRET=ضع_سراً_طويلاً_عشوائياً`
+  static const String pushDispatchSecret = String.fromEnvironment(
+    'PUSH_DISPATCH_SECRET',
+    defaultValue: '',
+  );
 }

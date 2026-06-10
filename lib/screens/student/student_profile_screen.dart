@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/assignment_service.dart';
+import '../../services/exam_service.dart';
+import '../../services/ai_service.dart';
+import '../../models/assignment_model.dart';
 
 import '../login_screen.dart';
 
@@ -12,8 +17,172 @@ import 'privacy_security_screen.dart';
 import 'notification_settings_screen.dart';
 import 'student_qr_code_screen.dart';
 
-class StudentProfileScreen extends StatelessWidget {
+class StudentProfileScreen extends StatefulWidget {
   const StudentProfileScreen({super.key});
+
+  @override
+  State<StudentProfileScreen> createState() => _StudentProfileScreenState();
+}
+
+class _StudentProfileScreenState extends State<StudentProfileScreen> {
+  final AssignmentService _assignmentService = AssignmentService();
+  final ExamService _examService = ExamService();
+  final AIService _aiService = AIService();
+
+  bool _loadingData = true;
+  int _trainingStreakDays = 0;
+  int _submittedAssignments = 0;
+  int _gradedAssignments = 0;
+  int _improvedMistakes = 0;
+  int _finishedAttempts = 0;
+  double _avgPercent = 0;
+  double _correctRatePercent = 0;
+  List<String> _strongSubjects = [];
+  List<String> _weakSubjects = [];
+  String _aiInsight = 'يتم تجهيز تحليل الذكاء الاصطناعي...';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadProfileAnalytics();
+    });
+  }
+
+  Future<void> _loadProfileAnalytics() async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final user = authProvider.user;
+    if (user == null) {
+      setState(() => _loadingData = false);
+      return;
+    }
+
+    setState(() => _loadingData = true);
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final streak =
+          (userDoc.data()?['mistakeTrainingStreakDays'] as num?)?.toInt() ?? 0;
+
+      List<AssignmentModel> assignments = [];
+      if (user.classIds != null && user.classIds!.isNotEmpty) {
+        assignments = await _assignmentService.getStudentAssignments(
+          user.classIds!,
+        );
+      }
+      final submissions = await _assignmentService.getSubmissionsByStudentId(
+        user.uid,
+      );
+      final graded = submissions
+          .where((s) => s.isGraded && s.grade != null)
+          .toList();
+
+      final assignmentById = {for (final a in assignments) a.id: a};
+      final Map<String, List<double>> percentBySubject = {};
+      double sumPercent = 0;
+      for (final s in graded) {
+        final a = assignmentById[s.assignmentId];
+        if (a == null || a.totalPoints <= 0) continue;
+        final percent = (s.grade! / a.totalPoints) * 100;
+        sumPercent += percent;
+        percentBySubject.putIfAbsent(a.subject, () => []).add(percent);
+      }
+      final avgPercent = graded.isEmpty
+          ? 0.0
+          : (sumPercent / graded.length).toDouble();
+
+      final subjectAverages = percentBySubject.entries.map((e) {
+        final avg = (e.value.reduce((a, b) => a + b) / e.value.length)
+            .toDouble();
+        return MapEntry<String, double>(e.key, avg);
+      }).toList();
+      subjectAverages.sort((a, b) => b.value.compareTo(a.value));
+      final strong = subjectAverages.take(3).map((e) => e.key).toList();
+      final weak = subjectAverages.reversed.take(3).map((e) => e.key).toList();
+
+      final attempts = await _examService.getStudentFinishedAttempts(user.uid);
+      int totalAnswers = 0;
+      int totalCorrect = 0;
+      int improvedMistakes = 0;
+      for (final attempt in attempts) {
+        final answers = await _examService.getAttemptAnswers(attempt.id);
+        for (final a in answers) {
+          totalAnswers += 1;
+          final gained = a.autoScore + a.manualScore;
+          if ((a.isAutoCorrect && a.isCorrect == true) ||
+              (!a.isAutoCorrect && gained > 0)) {
+            totalCorrect += 1;
+          }
+          if (gained > 0 && gained <= 1) {
+            improvedMistakes += 1;
+          }
+        }
+      }
+      final correctRate = totalAnswers == 0
+          ? 0.0
+          : ((totalCorrect / totalAnswers) * 100).toDouble();
+
+      final aiInsight = await _buildAIInsight(
+        avgPercent: avgPercent,
+        correctRate: correctRate,
+        streak: streak,
+        strongSubjects: strong,
+        weakSubjects: weak,
+        submittedAssignments: submissions.length,
+        gradedAssignments: graded.length,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _trainingStreakDays = streak;
+        _submittedAssignments = submissions.length;
+        _gradedAssignments = graded.length;
+        _avgPercent = avgPercent;
+        _strongSubjects = strong;
+        _weakSubjects = weak;
+        _finishedAttempts = attempts.length;
+        _correctRatePercent = correctRate;
+        _improvedMistakes = improvedMistakes;
+        _aiInsight = aiInsight;
+        _loadingData = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingData = false);
+    }
+  }
+
+  Future<String> _buildAIInsight({
+    required double avgPercent,
+    required double correctRate,
+    required int streak,
+    required List<String> strongSubjects,
+    required List<String> weakSubjects,
+    required int submittedAssignments,
+    required int gradedAssignments,
+  }) async {
+    final prompt =
+        '''
+قدّم توصية تعليمية قصيرة جدا (سطر أو سطرين) لطالب بناءً على البيانات التالية:
+- متوسط الدرجات: ${avgPercent.toStringAsFixed(0)}%
+- نسبة الإجابات الصحيحة بالاختبارات: ${correctRate.toStringAsFixed(0)}%
+- السلسلة اليومية: $streak
+- المواد القوية: ${strongSubjects.isEmpty ? 'غير متاحة' : strongSubjects.join('، ')}
+- المواد الضعيفة: ${weakSubjects.isEmpty ? 'غير متاحة' : weakSubjects.join('، ')}
+- الواجبات المسلمة: $submittedAssignments
+- الواجبات المصححة: $gradedAssignments
+اكتب بالعربية، تحفيزي وعملي، بدون إطالة.''';
+    try {
+      final text = await _aiService.chat(prompt: prompt);
+      return text.trim().isEmpty
+          ? 'استمر يوميًا على تدريب نقاط الضعف مع مراجعة الأخطاء.'
+          : text.trim();
+    } catch (_) {
+      return 'استمر يوميًا على تدريب نقاط الضعف مع مراجعة الأخطاء.';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +231,7 @@ class StudentProfileScreen extends StatelessWidget {
             _buildProgressOverview(),
 
             // Achievements & Badges
-            _buildAchievementsSection(),
+            _buildAchievementsSection(authProvider.user?.xp ?? 0),
 
             // Learning Statistics
             _buildLearningStatistics(),
@@ -81,7 +250,11 @@ class StudentProfileScreen extends StatelessWidget {
   }
 
   // Profile Header Section
-  Widget _buildProfileHeader(BuildContext context, String userName, String studentCode) {
+  Widget _buildProfileHeader(
+    BuildContext context,
+    String userName,
+    String studentCode,
+  ) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -257,13 +430,19 @@ class StudentProfileScreen extends StatelessWidget {
 
         final int currentXP = user.xp;
         final int currentLevel = user.level;
-        
+
         // Get XP required for current and next level
-        final int currentLevelMinXP = StudentProfileScreen._getXPRequiredForLevel(currentLevel);
-        final int nextLevelMinXP = currentLevel >= 10 ? currentXP : StudentProfileScreen._getXPRequiredForLevel(currentLevel + 1);
+        final int currentLevelMinXP = _getXPRequiredForLevel(currentLevel);
+        final int nextLevelMinXP = currentLevel >= 10
+            ? currentXP
+            : _getXPRequiredForLevel(currentLevel + 1);
         final int xpInCurrentLevel = currentXP - currentLevelMinXP;
-        final int xpNeededForNextLevel = currentLevel >= 10 ? 0 : (nextLevelMinXP - currentLevelMinXP);
-        final double progress = currentLevel >= 10 ? 1.0 : (xpInCurrentLevel / xpNeededForNextLevel).clamp(0.0, 1.0);
+        final int xpNeededForNextLevel = currentLevel >= 10
+            ? 0
+            : (nextLevelMinXP - currentLevelMinXP);
+        final double progress = currentLevel >= 10
+            ? 1.0
+            : (xpInCurrentLevel / xpNeededForNextLevel).clamp(0.0, 1.0);
 
         return Container(
           margin: const EdgeInsets.all(16),
@@ -414,7 +593,7 @@ class StudentProfileScreen extends StatelessWidget {
                     const Text('🔥', style: TextStyle(fontSize: 24)),
                     const SizedBox(width: 12),
                     Text(
-                      '7 أيام متتالية من التعلّم',
+                      '$_trainingStreakDays أيام متتالية من التعلّم',
                       style: GoogleFonts.cairo(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -432,7 +611,40 @@ class StudentProfileScreen extends StatelessWidget {
   }
 
   // Achievements & Badges Section
-  Widget _buildAchievementsSection() {
+  Widget _buildAchievementsSection(int xp) {
+    final badges = <_ProfileBadge>[
+      _ProfileBadge(
+        Icons.rocket_launch,
+        'بداية قوية',
+        _submittedAssignments >= 1,
+        const Color(0xFF60A5FA),
+      ),
+      _ProfileBadge(
+        Icons.local_fire_department,
+        '3 أيام مستمرة',
+        _trainingStreakDays >= 3,
+        const Color(0xFFF97316),
+      ),
+      _ProfileBadge(
+        Icons.whatshot,
+        '7 أيام مستمرة',
+        _trainingStreakDays >= 7,
+        const Color(0xFFEA580C),
+      ),
+      _ProfileBadge(Icons.star, 'ألف XP', xp >= 1000, const Color(0xFFFACC15)),
+      _ProfileBadge(
+        Icons.quiz,
+        'منجز الاختبارات',
+        _finishedAttempts >= 3,
+        const Color(0xFF818CF8),
+      ),
+      _ProfileBadge(
+        Icons.workspace_premium,
+        '5 درجات ممتازة',
+        _avgPercent >= 85 && _gradedAssignments >= 5,
+        const Color(0xFF22C55E),
+      ),
+    ];
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -451,37 +663,14 @@ class StudentProfileScreen extends StatelessWidget {
             height: 100,
             child: ListView(
               scrollDirection: Axis.horizontal,
-              children: [
-                _buildBadge(
-                  Icons.emoji_events,
-                  'إتقان الكسور',
-                  true,
-                  Colors.amber,
-                ),
-                const SizedBox(width: 12),
-                _buildBadge(Icons.star, 'متعلم نشط', true, Colors.blue),
-                const SizedBox(width: 12),
-                _buildBadge(
-                  Icons.workspace_premium,
-                  'خبير الرياضيات',
-                  true,
-                  Colors.purple,
-                ),
-                const SizedBox(width: 12),
-                _buildBadge(
-                  Icons.military_tech,
-                  'أسبوع مثالي',
-                  false,
-                  Colors.grey,
-                ),
-                const SizedBox(width: 12),
-                _buildBadge(
-                  Icons.workspace_premium,
-                  'مستوى متقدم',
-                  false,
-                  Colors.grey,
-                ),
-              ],
+              children: badges
+                  .map(
+                    (b) => Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: _buildBadge(b.icon, b.title, b.unlocked, b.color),
+                    ),
+                  )
+                  .toList(),
             ),
           ),
         ],
@@ -531,6 +720,8 @@ class StudentProfileScreen extends StatelessWidget {
 
   // Learning Statistics Section
   Widget _buildLearningStatistics() {
+    final avgText = '${_avgPercent.toStringAsFixed(0)}%';
+    final correctText = '${_correctRatePercent.toStringAsFixed(0)}%';
     return Container(
       margin: const EdgeInsets.all(16),
       child: Column(
@@ -551,7 +742,7 @@ class StudentProfileScreen extends StatelessWidget {
                 child: _buildStatCard(
                   icon: Icons.assignment_turned_in,
                   title: 'الواجبات المكتملة',
-                  value: '23',
+                  value: '$_submittedAssignments',
                   color: const Color(0xFF22C55E),
                 ),
               ),
@@ -560,7 +751,7 @@ class StudentProfileScreen extends StatelessWidget {
                 child: _buildStatCard(
                   icon: Icons.check_circle,
                   title: 'نسبة الإجابات الصحيحة',
-                  value: '85%',
+                  value: correctText,
                   color: const Color(0xFF22C55E),
                 ),
               ),
@@ -572,8 +763,8 @@ class StudentProfileScreen extends StatelessWidget {
               Expanded(
                 child: _buildStatCard(
                   icon: Icons.access_time,
-                  title: 'متوسط زمن التعلّم',
-                  value: '45 د',
+                  title: 'الاختبارات المنجزة',
+                  value: '$_finishedAttempts',
                   color: const Color(0xFF2563EB),
                 ),
               ),
@@ -582,11 +773,18 @@ class StudentProfileScreen extends StatelessWidget {
                 child: _buildStatCard(
                   icon: Icons.trending_up,
                   title: 'الأخطاء المحسّنة',
-                  value: '12',
+                  value: '$_improvedMistakes',
                   color: const Color(0xFFFB923C),
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          _buildStatCard(
+            icon: Icons.grade,
+            title: 'متوسط الدرجات',
+            value: avgText,
+            color: const Color(0xFF7C3AED),
           ),
         ],
       ),
@@ -699,11 +897,12 @@ class StudentProfileScreen extends StatelessWidget {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: [
-                  _buildChip('الجمع', const Color(0xFF22C55E)),
-                  _buildChip('الضرب', const Color(0xFF22C55E)),
-                  _buildChip('الطرح', const Color(0xFF22C55E)),
-                ],
+                children:
+                    (_strongSubjects.isNotEmpty
+                            ? _strongSubjects
+                            : ['لا توجد بيانات كافية'])
+                        .map((s) => _buildChip(s, const Color(0xFF22C55E)))
+                        .toList(),
               ),
             ],
           ),
@@ -724,10 +923,12 @@ class StudentProfileScreen extends StatelessWidget {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: [
-                  _buildChip('الكسور', const Color(0xFFFB923C)),
-                  _buildChip('القسمة', const Color(0xFFFB923C)),
-                ],
+                children:
+                    (_weakSubjects.isNotEmpty
+                            ? _weakSubjects
+                            : ['لا توجد بيانات كافية'])
+                        .map((s) => _buildChip(s, const Color(0xFFFB923C)))
+                        .toList(),
               ),
             ],
           ),
@@ -749,7 +950,7 @@ class StudentProfileScreen extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'تحتاج إلى مزيد من التدريب على الكسور البسيطة',
+                    _loadingData ? 'يتم تحليل بياناتك...' : _aiInsight,
                     style: GoogleFonts.cairo(
                       fontSize: 14,
                       color: const Color(0xFF111827),
@@ -871,6 +1072,55 @@ class StudentProfileScreen extends StatelessWidget {
           ),
           const Divider(height: 1),
           _buildSettingItem(
+            icon: Icons.delete_forever_outlined,
+            title: 'حذف الحساب',
+            textColor: Colors.red,
+            onTap: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text('حذف الحساب', style: GoogleFonts.cairo()),
+                  content: Text(
+                    'سيتم حذف الحساب نهائياً من النظام ولا يمكن التراجع. هل تريد المتابعة؟',
+                    style: GoogleFonts.cairo(),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text('إلغاء', style: GoogleFonts.cairo()),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text(
+                        'حذف نهائي',
+                        style: GoogleFonts.cairo(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm != true) return;
+
+              try {
+                await authProvider.deleteAccount();
+                if (!context.mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (route) => false,
+                );
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(e.toString(), style: GoogleFonts.cairo()),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+          ),
+          const Divider(height: 1),
+          _buildSettingItem(
             icon: Icons.logout,
             title: 'تسجيل الخروج',
             textColor: Colors.red,
@@ -942,7 +1192,7 @@ class StudentProfileScreen extends StatelessWidget {
   }
 
   // Helper function to get XP required for a level
-  static int _getXPRequiredForLevel(int level) {
+  int _getXPRequiredForLevel(int level) {
     if (level <= 1) return 0;
     if (level == 2) return 1000;
     if (level == 3) return 3000;
@@ -955,4 +1205,13 @@ class StudentProfileScreen extends StatelessWidget {
     if (level == 10) return 384000;
     return 768000; // Level 11+ (max)
   }
+}
+
+class _ProfileBadge {
+  final IconData icon;
+  final String title;
+  final bool unlocked;
+  final Color color;
+
+  _ProfileBadge(this.icon, this.title, this.unlocked, this.color);
 }

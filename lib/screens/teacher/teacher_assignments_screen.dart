@@ -6,6 +6,7 @@ import '../../services/assignment_service.dart';
 import '../../models/assignment_model.dart';
 import 'create_assignment_screen.dart';
 import 'grade_submissions_screen.dart';
+import 'teacher_timed_assessments_screen.dart';
 
 class TeacherAssignmentsScreen extends StatefulWidget {
   const TeacherAssignmentsScreen({super.key});
@@ -18,6 +19,8 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
   final AssignmentService _assignmentService = AssignmentService();
   List<AssignmentModel> _assignments = [];
   bool _isLoading = true;
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
 
   @override
   void initState() {
@@ -71,7 +74,7 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         title: Text(
-          'الواجبات',
+          _selectionMode ? 'تم تحديد ${_selectedIds.length}' : 'الواجبات',
           style: GoogleFonts.cairo(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -79,20 +82,78 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
           ),
         ),
         actions: [
+          if (_selectionMode) ...[
+            IconButton(
+              tooltip: 'إلغاء التحديد',
+              icon: const Icon(Icons.close, color: Color(0xFF6B7280)),
+              onPressed: () {
+                setState(() {
+                  _selectionMode = false;
+                  _selectedIds.clear();
+                });
+              },
+            ),
+            IconButton(
+              tooltip: 'حذف المحدد',
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
+              onPressed: _selectedIds.isEmpty ? null : _deleteSelectedAssignments,
+            ),
+          ] else ...[
+            IconButton(
+              tooltip: 'تحديد',
+              icon: const Icon(Icons.checklist_rounded, color: Color(0xFF2563EB)),
+              onPressed: _assignments.isEmpty
+                  ? null
+                  : () {
+                      setState(() => _selectionMode = true);
+                    },
+            ),
+          ],
           IconButton(
-            icon: const Icon(Icons.add, color: Color(0xFF2563EB)),
-            onPressed: () async {
-              final result = await Navigator.push(
+            tooltip: 'الاختبارات المؤقتة',
+            icon: const Icon(Icons.quiz, color: Color(0xFF059669)),
+            onPressed: () {
+              Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => const CreateAssignmentScreen(),
+                  builder: (_) => const TeacherTimedAssessmentsScreen(
+                    assessmentType: 'exam',
+                    titleText: 'الاختبارات المؤقتة',
+                  ),
                 ),
               );
-              if (result == true) {
-                _loadAssignments();
-              }
             },
           ),
+          IconButton(
+            tooltip: 'الوظائف المؤقتة',
+            icon: const Icon(Icons.timer, color: Color(0xFF7C3AED)),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const TeacherTimedAssessmentsScreen(
+                    assessmentType: 'assignment',
+                    titleText: 'الوظائف المؤقتة',
+                  ),
+                ),
+              );
+            },
+          ),
+          if (!_selectionMode)
+            IconButton(
+              icon: const Icon(Icons.add, color: Color(0xFF2563EB)),
+              onPressed: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const CreateAssignmentScreen(),
+                  ),
+                );
+                if (result == true) {
+                  _loadAssignments();
+                }
+              },
+            ),
         ],
       ),
       body: RefreshIndicator(
@@ -136,18 +197,67 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
     );
   }
 
+  Future<void> _deleteSelectedAssignments() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('حذف الواجبات المحددة', style: GoogleFonts.cairo()),
+        content: Text('سيتم حذف ${_selectedIds.length} واجبات. هل تريد المتابعة؟', style: GoogleFonts.cairo()),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('إلغاء', style: GoogleFonts.cairo())),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: Text('حذف', style: GoogleFonts.cairo(color: Colors.red))),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    for (final id in _selectedIds) {
+      await _assignmentService.deleteAssignment(id);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _loadAssignments();
+  }
+
   Widget _buildAssignmentCard(AssignmentModel assignment) {
     return FutureBuilder<int>(
       future: _assignmentService.getSubmissionCount(assignment.id),
       builder: (context, snapshot) {
         int submissionCount = snapshot.data ?? 0;
         
-        return Container(
+        final selected = _selectedIds.contains(assignment.id);
+        return GestureDetector(
+          onLongPress: () {
+            setState(() {
+              _selectionMode = true;
+              if (selected) {
+                _selectedIds.remove(assignment.id);
+              } else {
+                _selectedIds.add(assignment.id);
+              }
+            });
+          },
+          onTap: _selectionMode
+              ? () {
+                  setState(() {
+                    if (selected) {
+                      _selectedIds.remove(assignment.id);
+                    } else {
+                      _selectedIds.add(assignment.id);
+                    }
+                  });
+                }
+              : null,
+          child: Container(
           margin: const EdgeInsets.only(bottom: 16),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: selected ? const Color(0xFFEFF6FF) : Colors.white,
             borderRadius: BorderRadius.circular(16),
+            border: selected ? Border.all(color: const Color(0xFF2563EB), width: 1.5) : null,
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.05),
@@ -161,6 +271,13 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
             children: [
               Row(
                 children: [
+                  if (_selectionMode) ...[
+                    Icon(
+                      selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                      color: selected ? const Color(0xFF2563EB) : const Color(0xFF9CA3AF),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
@@ -234,7 +351,8 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              Row(
+              if (!_selectionMode)
+                Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
@@ -268,7 +386,7 @@ class _TeacherAssignmentsScreenState extends State<TeacherAssignmentsScreen> {
               ),
             ],
           ),
-        );
+        ));
       },
     );
   }

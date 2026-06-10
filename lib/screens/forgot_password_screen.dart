@@ -5,7 +5,6 @@ import '../widgets/skillup_logo.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/gradient_button.dart';
 import '../providers/auth_provider.dart';
-import 'verify_code_screen.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -44,15 +43,18 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       });
 
       if (success) {
-        // Navigate to verify code screen
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => VerifyCodeScreen(
-              email: _emailController.text.trim(),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني',
+              style: GoogleFonts.cairo(),
             ),
+            backgroundColor: Colors.green,
           ),
         );
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
+        Navigator.pop(context);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -89,7 +91,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               children: [
                 const SizedBox(height: 20),
                 // Logo
-                const SkillUpLogo(logoSize: 80, fontSize: 24),
+                const SkillUpLogo(logoSize: 88, fontSize: 24, showBrandName: false),
                 const SizedBox(height: 32),
                 // Title
                 Text(
@@ -103,7 +105,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 const SizedBox(height: 8),
                 // Description
                 Text(
-                  'أدخل بريدك الإلكتروني وسنرسل لك كود التحقق',
+                  'أدخل بريدك الإلكتروني وسنرسل لك رابط إعادة تعيين كلمة المرور',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.cairo(
                     fontSize: 16,
@@ -132,7 +134,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 const SizedBox(height: 32),
                 // Send code button
                 GradientButton(
-                  text: 'إرسال كود التحقق',
+                  text: 'إرسال رابط إعادة التعيين',
                   onPressed: _handleSendCode,
                   icon: Icons.send,
                   isLoading: _isLoading,

@@ -7,7 +7,7 @@ import '../widgets/gradient_button.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
 
-/// تظهر بعد تسجيل الدخول بـ Google لأول مرة؛ المستخدم لا يستطيع المتابعة دون اختيار نوع الحساب.
+/// تظهر بعد أول تسجيل دخول بدون ملف (يدوي أو Google) لإكمال الاسم ونوع الحساب.
 class ChooseAccountTypeScreen extends StatefulWidget {
   const ChooseAccountTypeScreen({super.key});
 
@@ -17,7 +17,10 @@ class ChooseAccountTypeScreen extends StatefulWidget {
 
 class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
   AccountType? _selectedAccountType;
+  /// male | female
+  String? _selectedGender;
   bool _isLoading = false;
+  final TextEditingController _nameController = TextEditingController();
 
   String get _accountTypeString {
     if (_selectedAccountType == AccountType.student) return 'student';
@@ -26,6 +29,16 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
   }
 
   Future<void> _submit() async {
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('يرجى إدخال الاسم', style: GoogleFonts.cairo()),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     if (_selectedAccountType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -36,10 +49,24 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
       return;
     }
 
+    if (_selectedGender == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('يرجى تحديد الجنس', style: GoogleFonts.cairo()),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    bool success = await authProvider.completeGoogleRegistration(_accountTypeString);
+    bool success = await authProvider.completeAccountSetup(
+      _accountTypeString,
+      name: _nameController.text.trim(),
+      gender: _selectedGender,
+    );
 
     if (!mounted) return;
     setState(() => _isLoading = false);
@@ -73,6 +100,9 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
     final authProvider = Provider.of<AuthProvider>(context);
     final fbUser = authProvider.firebaseUser;
     final displayName = fbUser?.displayName ?? fbUser?.email ?? '';
+    if (_nameController.text.isEmpty && (fbUser?.displayName?.isNotEmpty ?? false)) {
+      _nameController.text = fbUser!.displayName!;
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -83,7 +113,7 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const SizedBox(height: 32),
-              const SkillUpLogo(logoSize: 72, fontSize: 22),
+              const SkillUpLogo(logoSize: 72, fontSize: 22, showBrandName: false),
               const SizedBox(height: 24),
               Text(
                 'اختر نوع الحساب',
@@ -102,10 +132,29 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFC7D2FE)),
+                ),
+                child: Text(
+                  'أكمل بياناتك للمتابعة',
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF3730A3),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
               if (displayName.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Text(
-                  displayName,
+                  'الحساب: $displayName',
                   style: GoogleFonts.cairo(
                     fontSize: 14,
                     color: Colors.grey[700],
@@ -114,6 +163,49 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
                 ),
               ],
               const SizedBox(height: 32),
+              TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  labelText: 'الاسم',
+                  labelStyle: GoogleFonts.cairo(),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  'الجنس',
+                  style: GoogleFonts.cairo(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _genderChip(
+                      label: 'ذكر',
+                      value: 'male',
+                      selected: _selectedGender == 'male',
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _genderChip(
+                      label: 'أنثى',
+                      value: 'female',
+                      selected: _selectedGender == 'female',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -161,5 +253,46 @@ class _ChooseAccountTypeScreenState extends State<ChooseAccountTypeScreen> {
         ),
       ),
     );
+  }
+
+  Widget _genderChip({
+    required String label,
+    required String value,
+    required bool selected,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _isLoading ? null : () => setState(() => _selectedGender = value),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFEEF2FF) : Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? const Color(0xFF6366F1) : Colors.grey.shade300,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: GoogleFonts.cairo(
+                fontSize: 15,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? const Color(0xFF3730A3) : Colors.black87,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
   }
 }

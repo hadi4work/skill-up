@@ -212,6 +212,14 @@ class PushNotificationService {
 
   // Save FCM token for current user
   Future<void> saveTokenForUser(String userId) async {
+    if (_fcmToken == null) {
+      try {
+        _fcmToken = await _firebaseMessaging.getToken();
+      } catch (e) {
+        debugPrint('❌ saveTokenForUser: could not get FCM token: $e');
+        return;
+      }
+    }
     if (_fcmToken != null) {
       await _saveTokenToFirestore(_fcmToken!, userId: userId);
     }

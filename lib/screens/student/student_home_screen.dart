@@ -1,17 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/assignment_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/exam_service.dart';
+import '../../services/mistake_training_service.dart';
+import '../../services/student_content_seen_service.dart';
+import '../../services/user_service.dart';
 import '../../models/assignment_model.dart';
 import '../../models/notification_model.dart';
 import 'student_profile_screen.dart';
 import 'student_assignments_screen.dart';
 import 'student_analytics_screen.dart';
+import 'student_mistake_training_screen.dart';
 import 'notifications_screen.dart';
 import 'submit_assignment_screen.dart';
 import '../ai_assistant_screen.dart';
+import '../../widgets/swipe_to_delete_notification.dart';
 
 class StudentHomeScreen extends StatefulWidget {
   const StudentHomeScreen({super.key});
@@ -23,8 +30,18 @@ class StudentHomeScreen extends StatefulWidget {
 class _StudentHomeScreenState extends State<StudentHomeScreen> {
   int _currentIndex = 0;
   final AssignmentService _assignmentService = AssignmentService();
+  final ExamService _examService = ExamService();
   List<AssignmentModel> _recentAssignments = [];
+  List<String> _strongSubjects = [];
+  List<String> _weakSubjects = [];
+  double _avgPercent = 0;
+  int _needsReviewCount = 0;
+  int _trainingStreakDays = 0;
+  List<_HomeBadge> _earnedBadges = [];
+  String _aiRecommendation = 'استمر بالحل وستظهر التوصيات هنا.';
   bool _isLoadingAssignments = false;
+  final Set<String> _pendingDeletedNotificationIds = {};
+  bool _assignmentsTabBadge = false;
 
   @override
   void initState() {
@@ -47,12 +64,38 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     debugPrint('👤 Student user: ${user?.name}');
     debugPrint('📚 Student classIds: ${user?.classIds}');
 
-    if (user == null || user.classIds == null || user.classIds!.isEmpty) {
+    if (user == null) {
+      if (mounted) setState(() => _isLoadingAssignments = false);
+      return;
+    }
+
+    if (user.classIds == null || user.classIds!.isEmpty) {
       debugPrint('⚠️ Student has no classIds');
-      if (mounted) {
-        setState(() {
-          _isLoadingAssignments = false;
-        });
+      try {
+        final mistakeSvc = MistakeTrainingService();
+        final userSvc = UserService();
+        final mastered = await userSvc.getMistakeTrainingMasteredIds(user.uid);
+        final disc = await mistakeSvc.discoverMistakeItems(
+          studentId: user.uid,
+          classIds: [],
+          excludeIds: mastered,
+        );
+        await userSvc.syncMistakeTrainingPending(user.uid, disc);
+        final pending = await userSvc.getMistakeTrainingPending(user.uid);
+        if (mounted) {
+          setState(() {
+            _needsReviewCount = pending.length;
+            _isLoadingAssignments = false;
+            _assignmentsTabBadge = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _isLoadingAssignments = false;
+            _assignmentsTabBadge = false;
+          });
+        }
       }
       return;
     }
@@ -62,7 +105,109 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       final assignments = await _assignmentService.getStudentAssignments(
         user.classIds!,
       );
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final submissions = await _assignmentService.getSubmissionsByStudentId(
+        user.uid,
+      );
+      final finishedAttempts = await _examService.getStudentFinishedAttempts(user.uid);
+      final assignmentById = {for (final a in assignments) a.id: a};
+      final graded = submissions
+          .where((s) => s.isGraded && s.grade != null)
+          .toList();
+
+      final Map<String, List<double>> percentBySubject = {};
+      double avgPercent = 0;
+      if (graded.isNotEmpty) {
+        double sum = 0;
+        for (final s in graded) {
+          final assignment = assignmentById[s.assignmentId];
+          if (assignment == null || assignment.totalPoints <= 0) continue;
+          final percent = (s.grade! / assignment.totalPoints) * 100;
+          sum += percent;
+          percentBySubject.putIfAbsent(assignment.subject, () => []).add(percent);
+        }
+        avgPercent = sum / graded.length;
+      }
+
+      final mistakeSvc = MistakeTrainingService();
+      final userSvc = UserService();
+      final mastered = await userSvc.getMistakeTrainingMasteredIds(user.uid);
+      final discovered = await mistakeSvc.discoverMistakeItems(
+        studentId: user.uid,
+        classIds: user.classIds!,
+        excludeIds: mastered,
+      );
+      await userSvc.syncMistakeTrainingPending(user.uid, discovered);
+      final pendingReview = await userSvc.getMistakeTrainingPending(user.uid);
+      final needsReviewCount = pendingReview.length;
+
+      final subjectAverageEntries = percentBySubject.entries.map((entry) {
+        final values = entry.value;
+        final avg = values.reduce((a, b) => a + b) / values.length;
+        return MapEntry(entry.key, avg);
+      }).toList();
+      subjectAverageEntries.sort((a, b) => b.value.compareTo(a.value));
+      final strongSubjects = subjectAverageEntries.take(2).map((e) => e.key).toList();
+      final weakSubjects = subjectAverageEntries.reversed.take(2).map((e) => e.key).toList();
+      final streakDays = (userDoc.data()?['mistakeTrainingStreakDays'] as num?)?.toInt() ?? 0;
+      int highGradesCount = 0;
+      for (final s in graded) {
+        final assignment = assignmentById[s.assignmentId];
+        if (assignment == null || assignment.totalPoints <= 0) continue;
+        final percent = (s.grade! / assignment.totalPoints) * 100;
+        if (percent >= 85) highGradesCount += 1;
+      }
+      final earnedBadges = _buildEarnedBadges(
+        xp: user.xp,
+        streakDays: streakDays,
+        submittedCount: submissions.length,
+        gradedCount: graded.length,
+        highGradesCount: highGradesCount,
+        finishedAttemptsCount: finishedAttempts.length,
+      );
+
+      String recommendation;
+      if (graded.isEmpty) {
+        recommendation = 'ابدأ بتسليم الواجبات المصححة لتظهر توصيات أدق.';
+      } else if (avgPercent >= 85) {
+        recommendation = 'أداء ممتاز! حافظ على مستواك ودرّب زملاءك في ${strongSubjects.isNotEmpty ? strongSubjects.first : 'موادك القوية'}.';
+      } else if (weakSubjects.isNotEmpty) {
+        recommendation = 'ركّز هذا الأسبوع على ${weakSubjects.join(' و ')} لتحسين النتائج.';
+      } else {
+        recommendation = 'استمر بالممارسة اليومية لرفع متوسط الأداء.';
+      }
+
       debugPrint('✅ Loaded ${assignments.length} assignments');
+      bool tabBadge = false;
+      try {
+        final unseenA = await StudentContentSeenService.hasUnseenAssignments(
+          user.uid,
+          assignments.map((a) => a.id),
+        );
+        final exams = await _examService.getStudentAvailableExams(
+          user.classIds!,
+          assessmentType: 'exam',
+        );
+        final works = await _examService.getStudentAvailableExams(
+          user.classIds!,
+          assessmentType: 'assignment',
+        );
+        final unseenE = await StudentContentSeenService.hasUnseenTimedExams(
+          user.uid,
+          exams.map((e) => e.id),
+        );
+        final unseenW = await StudentContentSeenService.hasUnseenTimedAssignments(
+          user.uid,
+          works.map((e) => e.id),
+        );
+        tabBadge = unseenA || unseenE || unseenW;
+      } catch (_) {
+        tabBadge = false;
+      }
+
       if (mounted) {
         setState(() {
           // Show only upcoming assignments (not overdue) and limit to 3
@@ -71,6 +216,14 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
               .where((a) => a.deadline.isAfter(now))
               .take(3)
               .toList();
+          _strongSubjects = strongSubjects;
+          _weakSubjects = weakSubjects;
+          _avgPercent = avgPercent;
+          _needsReviewCount = needsReviewCount;
+          _trainingStreakDays = streakDays;
+          _earnedBadges = earnedBadges;
+          _aiRecommendation = recommendation;
+          _assignmentsTabBadge = tabBadge;
           debugPrint(
             '📋 Showing ${_recentAssignments.length} recent assignments',
           );
@@ -156,7 +309,46 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   // Assignments Page
   Widget _buildAssignmentsPage() {
-    return const StudentAssignmentsScreen();
+    return StudentAssignmentsScreen(
+      onAssignmentsTabBadgeShouldRefresh: _refreshAssignmentsTabBadge,
+    );
+  }
+
+  Future<void> _refreshAssignmentsTabBadge() async {
+    final user = Provider.of<AuthProvider>(context, listen: false).user;
+    if (user == null || user.classIds == null || user.classIds!.isEmpty) {
+      if (mounted) setState(() => _assignmentsTabBadge = false);
+      return;
+    }
+    try {
+      final assignments = await _assignmentService.getStudentAssignments(
+        user.classIds!,
+      );
+      final unseenA = await StudentContentSeenService.hasUnseenAssignments(
+        user.uid,
+        assignments.map((a) => a.id),
+      );
+      final exams = await _examService.getStudentAvailableExams(
+        user.classIds!,
+        assessmentType: 'exam',
+      );
+      final works = await _examService.getStudentAvailableExams(
+        user.classIds!,
+        assessmentType: 'assignment',
+      );
+      final unseenE = await StudentContentSeenService.hasUnseenTimedExams(
+        user.uid,
+        exams.map((e) => e.id),
+      );
+      final unseenW = await StudentContentSeenService.hasUnseenTimedAssignments(
+        user.uid,
+        works.map((e) => e.id),
+      );
+      final tabBadge = unseenA || unseenE || unseenW;
+      if (mounted) setState(() => _assignmentsTabBadge = tabBadge);
+    } catch (_) {
+      if (mounted) setState(() => _assignmentsTabBadge = false);
+    }
   }
 
   Widget _buildAnalyticsPage() {
@@ -446,7 +638,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                         const Text('🔥', style: TextStyle(fontSize: 20)),
                         const SizedBox(width: 4),
                         Text(
-                          '7 أيام',
+                          '$_trainingStreakDays ${_trainingStreakDays == 1 ? 'يوم' : 'أيام'}',
                           style: GoogleFonts.cairo(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -461,11 +653,11 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   Expanded(
                     child: Row(
                       children: [
-                        _buildBadgeIcon(Icons.military_tech, Colors.amber),
+                        _buildBadgeIcon(0),
                         const SizedBox(width: 8),
-                        _buildBadgeIcon(Icons.workspace_premium, Colors.purple),
+                        _buildBadgeIcon(1),
                         const SizedBox(width: 8),
-                        _buildBadgeIcon(Icons.emoji_events, Colors.blue),
+                        _buildBadgeIcon(2),
                       ],
                     ),
                   ),
@@ -478,16 +670,83 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
     );
   }
 
-  Widget _buildBadgeIcon(IconData icon, Color color) {
+  Widget _buildBadgeIcon(int index) {
+    final badge = index < _earnedBadges.length ? _earnedBadges[index] : null;
+    final isEarned = badge != null;
+    final icon = badge?.icon ?? Icons.lock_outline_rounded;
+    final color = badge?.color ?? const Color(0xFF9CA3AF);
+    final label = badge?.title ?? 'وسام مقفل';
     return Container(
       width: 40,
       height: 40,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.2),
+        color: isEarned ? Colors.white.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.12),
         shape: BoxShape.circle,
       ),
-      child: Icon(icon, color: color, size: 20),
+      child: Tooltip(
+        message: label,
+        child: Icon(icon, color: color, size: 20),
+      ),
     );
+  }
+
+  List<_HomeBadge> _buildEarnedBadges({
+    required int xp,
+    required int streakDays,
+    required int submittedCount,
+    required int gradedCount,
+    required int highGradesCount,
+    required int finishedAttemptsCount,
+  }) {
+    final all = <_HomeBadge>[
+      _HomeBadge(
+        id: 'starter',
+        title: 'بداية قوية',
+        icon: Icons.rocket_launch_rounded,
+        color: const Color(0xFF60A5FA),
+        earned: submittedCount >= 1,
+      ),
+      _HomeBadge(
+        id: 'streak3',
+        title: 'ملتزم 3 أيام',
+        icon: Icons.local_fire_department_rounded,
+        color: const Color(0xFFF97316),
+        earned: streakDays >= 3,
+      ),
+      _HomeBadge(
+        id: 'streak7',
+        title: 'ملتزم 7 أيام',
+        icon: Icons.whatshot_rounded,
+        color: const Color(0xFFEA580C),
+        earned: streakDays >= 7,
+      ),
+      _HomeBadge(
+        id: 'xp1000',
+        title: 'ألف XP',
+        icon: Icons.star_rounded,
+        color: const Color(0xFFFACC15),
+        earned: xp >= 1000,
+      ),
+      _HomeBadge(
+        id: 'quiz3',
+        title: 'منجز الاختبارات',
+        icon: Icons.quiz_rounded,
+        color: const Color(0xFF818CF8),
+        earned: finishedAttemptsCount >= 3,
+      ),
+      _HomeBadge(
+        id: 'high5',
+        title: '5 درجات ممتازة',
+        icon: Icons.workspace_premium_rounded,
+        color: const Color(0xFF22C55E),
+        earned: highGradesCount >= 5 && gradedCount >= 5,
+      ),
+    ];
+
+    final earned = all.where((b) => b.earned).toList();
+    if (earned.isEmpty) return [];
+    // عرض أهم 3 أوسمة مكتسبة
+    return earned.take(3).toList();
   }
 
   // Helper function to get XP required for a level
@@ -673,9 +932,10 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             builder: (context) =>
                 SubmitAssignmentScreen(assignment: assignment),
           ),
-        ).then((result) {
+        ).then((result) async {
+          await _refreshAssignmentsTabBadge();
           if (result == true) {
-            _loadRecentAssignments();
+            await _loadRecentAssignments();
           }
         });
       },
@@ -807,25 +1067,32 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 ),
               ),
               const SizedBox(width: 12),
-              Text(
-                'التعلّم من الأخطاء',
-                style: GoogleFonts.cairo(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF111827),
+              Expanded(
+                child: Text(
+                  'التعلّم من الأخطاء',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.cairo(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF111827),
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 16),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '5 أسئلة',
+                      '$_needsReviewCount ${_needsReviewCount == 1 ? 'عنصر' : 'عناصر'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.cairo(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -834,6 +1101,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     ),
                     Text(
                       'تحتاج إلى مراجعة',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.cairo(
                         fontSize: 14,
                         color: const Color(0xFF6B7280),
@@ -842,28 +1111,66 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF22C55E),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.refresh, color: Colors.white, size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      'أعد المحاولة',
-                      style: GoogleFonts.cairo(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+              const SizedBox(width: 8),
+              Flexible(
+                child: InkWell(
+                  onTap: () {
+                    final user = Provider.of<AuthProvider>(context, listen: false).user;
+                    if (user == null) return;
+                    if (_needsReviewCount == 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'ممتاز! لا توجد أخطاء تحتاج مراجعة حالياً.',
+                            style: GoogleFonts.cairo(),
+                          ),
+                          backgroundColor: const Color(0xFF059669),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => StudentMistakeTrainingScreen(
+                          studentId: user.uid,
+                          classIds: user.classIds ?? const [],
+                        ),
                       ),
+                    ).then((_) {
+                      if (mounted) _loadRecentAssignments();
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
                     ),
-                  ],
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22C55E),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.analytics, color: Colors.white, size: 20),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'أعد المحاولة',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.cairo(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -885,7 +1192,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'المواضيع الضعيفة: الجبر، الهندسة',
+                    _weakSubjects.isEmpty
+                        ? 'لا توجد مواضيع ضعيفة واضحة حاليًا'
+                        : 'المواضيع الضعيفة: ${_weakSubjects.join('، ')}',
                     style: GoogleFonts.cairo(
                       fontSize: 14,
                       color: const Color(0xFF111827),
@@ -921,7 +1230,7 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 title: 'نقاط القوة',
                 icon: Icons.trending_up,
                 color: const Color(0xFF22C55E),
-                items: ['الجبر', 'الفيزياء'],
+                items: _strongSubjects.isNotEmpty ? _strongSubjects : ['لا توجد بيانات كافية'],
               ),
             ),
             const SizedBox(width: 12),
@@ -930,64 +1239,91 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 title: 'المناطق الضعيفة',
                 icon: Icons.trending_down,
                 color: const Color(0xFFFACC15),
-                items: ['الهندسة', 'الكيمياء'],
+                items: _weakSubjects.isNotEmpty ? _weakSubjects : ['لا توجد بيانات كافية'],
               ),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
+        InkWell(
+          onTap: () {
+            setState(() => _currentIndex = 2);
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
                 ),
-                child: const Icon(
-                  Icons.psychology,
-                  color: Color(0xFF7C3AED),
-                  size: 24,
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.psychology,
+                    color: Color(0xFF7C3AED),
+                    size: 24,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'توصية الذكاء الاصطناعي',
+                        style: GoogleFonts.cairo(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF111827),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _aiRecommendation,
+                        style: GoogleFonts.cairo(
+                          fontSize: 12,
+                          color: const Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      'توصية الذكاء الاصطناعي',
+                      '${_avgPercent.toStringAsFixed(0)}%',
                       style: GoogleFonts.cairo(
-                        fontSize: 14,
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF111827),
+                        color: const Color(0xFF2563EB),
                       ),
                     ),
-                    const SizedBox(height: 4),
                     Text(
-                      'ركز على حل المزيد من أسئلة الهندسة',
+                      'متوسطك',
                       style: GoogleFonts.cairo(
-                        fontSize: 12,
+                        fontSize: 11,
                         color: const Color(0xFF6B7280),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -1086,7 +1422,10 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
         }
 
         final notifications = snapshot.data ?? [];
-        final recentNotifications = notifications.take(2).toList();
+        final recentNotifications = notifications
+            .where((n) => !_pendingDeletedNotificationIds.contains(n.id))
+            .take(2)
+            .toList();
 
         if (recentNotifications.isEmpty) {
           return const SizedBox.shrink();
@@ -1096,14 +1435,17 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  'الإشعارات',
-                  style: GoogleFonts.cairo(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF111827),
+                Expanded(
+                  child: Text(
+                    'الإشعارات',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.cairo(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF111827),
+                    ),
                   ),
                 ),
                 TextButton(
@@ -1131,28 +1473,42 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             ...recentNotifications.map(
               (notification) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: _buildNotificationItem(
-                  icon: Icons.assignment,
-                  title: notification.title,
-                  subtitle: notification.body,
-                  color: const Color(0xFF2563EB),
-                  isRead: notification.isRead,
-                  onTap: () async {
-                    if (!notification.isRead) {
-                      await NotificationService().markAsRead(notification.id);
-                    }
-                    if (mounted &&
-                        notification.type == 'assignment' &&
-                        notification.assignmentId != null) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              const StudentAssignmentsScreen(),
-                        ),
-                      );
-                    }
+                child: SwipeToDeleteNotification(
+                  notificationId: notification.id,
+                  onDismissed: () {
+                    setState(() => _pendingDeletedNotificationIds.add(notification.id));
+                    NotificationService()
+                        .deleteNotification(notification.id)
+                        .catchError((_) {
+                      if (mounted) {
+                        setState(() =>
+                            _pendingDeletedNotificationIds.remove(notification.id));
+                      }
+                    });
                   },
+                  child: _buildNotificationItem(
+                    icon: Icons.assignment,
+                    title: notification.title,
+                    subtitle: notification.body,
+                    color: const Color(0xFF2563EB),
+                    isRead: notification.isRead,
+                    onTap: () async {
+                      if (!notification.isRead) {
+                        await NotificationService().markAsRead(notification.id);
+                      }
+                      if (mounted &&
+                          notification.type == 'assignment' &&
+                          notification.assignmentId != null) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                const StudentAssignmentsScreen(),
+                          ),
+                        );
+                      }
+                    },
+                  ),
                 ),
               ),
             ),
@@ -1205,6 +1561,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                 children: [
                   Text(
                     title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.cairo(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
@@ -1258,6 +1616,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
           setState(() {
             _currentIndex = index;
           });
+          if (index == 1) {
+            _refreshAssignmentsTabBadge();
+          }
         },
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF2563EB),
@@ -1273,7 +1634,26 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             label: 'الرئيسية',
           ),
           BottomNavigationBarItem(
-            icon: const Icon(Icons.assignment),
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.assignment),
+                if (_assignmentsTabBadge)
+                  PositionedDirectional(
+                    top: -2,
+                    end: -4,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             label: 'الواجبات',
           ),
           BottomNavigationBarItem(
@@ -1288,4 +1668,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       ),
     );
   }
+}
+
+class _HomeBadge {
+  final String id;
+  final String title;
+  final IconData icon;
+  final Color color;
+  final bool earned;
+
+  const _HomeBadge({
+    required this.id,
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.earned,
+  });
 }

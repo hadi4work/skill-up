@@ -63,8 +63,6 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^5.2.3
 
-  # OCR - استخراج النص من الصور (بدون ML Kit لتجنب مشاكل البناء)
-  textify: ^0.3.3
   http: ^1.2.2
   path_provider: ^2.1.4
   path: ^1.9.0
@@ -80,8 +78,8 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   
-  # App icon generator
-  flutter_launcher_icons: ^0.13.1
+  # App icon generator (0.14+ supports adaptive foreground inset %)
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -98,13 +96,15 @@ flutter:
   assets:
     - assets/images/
 
-# App icon configuration
+# App icon configuration (robot icon; inset shrinks foreground inside adaptive mask)
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/images/skillup_logo.jpg"
+  image_path: "assets/images/icon.png"
   adaptive_icon_background: "#87CEEB"
-  adaptive_icon_foreground: "assets/images/skillup_logo.jpg"
+  adaptive_icon_foreground: "assets/images/icon.png"
+  # نسبة هامش حول الرسم داخل قناع الأيقونة التكيّفية (كلما زادت قلّ التكبير الظاهر)
+  adaptive_icon_foreground_inset: 18
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import 'onboarding_page.dart';
 import 'login_screen.dart';
 import 'choose_account_type_screen.dart';
 import 'student/student_home_screen.dart';
@@ -59,8 +58,8 @@ class AuthWrapper extends StatelessWidget {
           }
         }
 
-        // Show onboarding for new users
-        return const OnboardingPage();
+        // عند عدم وجود جلسة، افتح تسجيل الدخول مباشرة
+        return const LoginScreen();
       },
     );
   }

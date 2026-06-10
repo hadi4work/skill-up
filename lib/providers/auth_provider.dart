@@ -14,11 +14,14 @@ class AuthProvider with ChangeNotifier {
   final PushNotificationService? _pushNotificationService;
 
   UserModel? _user;
+  String? _parentSelectedChildId;
   bool _isLoading = false;
   String? _errorMessage;
   StreamSubscription<UserModel?>? _userProfileSubscription;
 
-  AuthProvider() : _pushNotificationService = Platform.isAndroid ? PushNotificationService() : null {
+  /// [pushNotificationService] يجب أن يكون نفس المثيل المُهيأ في [main] (يحمل FCM token الفعلي).
+  AuthProvider({PushNotificationService? pushNotificationService})
+      : _pushNotificationService = pushNotificationService {
     _init();
   }
 
@@ -26,11 +29,13 @@ class AuthProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   bool get isAuthenticated => _user != null;
+  String? get parentSelectedChildId => _parentSelectedChildId;
 
   /// المستخدم مسجّل دخوله في Firebase لكن لم يختر نوع الحساب بعد (مثلاً بعد تسجيل الدخول بـ Google لأول مرة).
   bool get needsAccountTypeSelection {
     User? fb = _authService.currentUser;
     if (fb == null) return false;
+    if (!fb.emailVerified) return false;
     return _user == null || (_user!.accountType.isEmpty);
   }
 
@@ -54,6 +59,7 @@ class AuthProvider with ChangeNotifier {
         _listenToUserProfileChanges(firebaseUser.uid);
       } else {
         _user = null;
+        _parentSelectedChildId = null;
         notifyListeners();
       }
     });
@@ -105,11 +111,17 @@ class AuthProvider with ChangeNotifier {
       UserModel? userProfile = await _userService.getUserProfile(uid);
       if (userProfile != null) {
         _user = userProfile;
+        if (userProfile.accountType == 'parent') {
+          await _loadParentSelectedChildId(uid);
+        } else {
+          _parentSelectedChildId = null;
+        }
         debugPrint('User loaded: ${userProfile.name}, Type: ${userProfile.accountType}');
         await _saveAuthState(true);
       } else {
         debugPrint('User profile not found for uid: $uid');
         _user = null;
+        _parentSelectedChildId = null;
         await _saveAuthState(false);
       }
     } catch (e) {
@@ -124,10 +136,8 @@ class AuthProvider with ChangeNotifier {
 
   // Sign up with email and password
   Future<bool> signUp({
-    required String name,
     required String email,
     required String password,
-    required String accountType,
   }) async {
     try {
       _isLoading = true;
@@ -135,9 +145,7 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
 
       debugPrint('🚀 Starting sign up process...');
-      debugPrint('   Name: $name');
       debugPrint('   Email: $email');
-      debugPrint('   Account Type: $accountType');
 
       // Create auth user
       UserCredential? userCredential;
@@ -158,66 +166,33 @@ class AuthProvider with ChangeNotifier {
       if (userCredential?.user != null) {
         final uid = userCredential!.user!.uid;
         debugPrint('   User UID: $uid');
-        
-        // Create user profile in Firestore
-        UserModel newUser = UserModel.fromFirebaseUser(
-          uid: uid,
-          name: name,
-          email: email,
-          accountType: accountType,
-        );
-
-        // Generate student code if student
-        if (accountType == 'student') {
-          try {
-            debugPrint('📚 Generating student code...');
-            String studentCode = await _userService.generateStudentCode();
-            newUser = newUser.copyWith(studentCode: studentCode);
-            debugPrint('✅ Student code generated: $studentCode');
-          } catch (e) {
-            debugPrint('⚠️ Error generating student code: $e');
-            debugPrint('   Continuing without student code...');
-            // Continue without student code - can be added later
-          }
-        }
-
-        // Save user profile to Firestore
         try {
-          debugPrint('💾 Saving user profile to Firestore...');
-          await _userService.createUserProfile(newUser);
-          debugPrint('✅ User profile saved successfully');
-          
           // Send email verification
-          try {
-            debugPrint('📧 Sending email verification...');
-            await _authService.sendEmailVerification();
-            debugPrint('✅ Email verification sent successfully');
-          } catch (e) {
-            debugPrint('⚠️ Error sending email verification: $e');
-            // Continue even if email verification fails
-          }
-          
-          _user = newUser;
-          debugPrint('✅ User created: ${newUser.name}, Type: ${newUser.accountType}');
-          // Don't save auth state yet - user needs to verify email
+          debugPrint('📧 Sending email verification...');
+          await _authService.sendEmailVerification();
+          debugPrint('✅ Email verification sent successfully');
+
+          // Manual signup now creates only Auth record.
+          // Profile (name + account type) is completed after verification/login.
+          _user = null;
           await _saveAuthState(false);
 
           _isLoading = false;
           notifyListeners();
           return true;
         } catch (e) {
-          debugPrint('❌ Error saving user profile to Firestore: $e');
+          debugPrint('❌ Error during post-signup step: $e');
           debugPrint('   Error type: ${e.runtimeType}');
           
-          // Try to delete auth user if Firestore save failed
+          // Try to delete auth user if post step failed
           try {
             await userCredential.user?.delete();
-            debugPrint('   Auth user deleted due to Firestore error');
+            debugPrint('   Auth user deleted due to setup error');
           } catch (deleteError) {
             debugPrint('   Error deleting auth user: $deleteError');
           }
           
-          _errorMessage = 'فشل حفظ بيانات المستخدم: $e';
+          _errorMessage = 'فشل إنشاء الحساب: $e';
           _isLoading = false;
           notifyListeners();
           return false;
@@ -331,8 +306,12 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  /// إكمال التسجيل عبر Google باختيار نوع الحساب (طالب / معلم / ولي أمر).
-  Future<bool> completeGoogleRegistration(String accountType) async {
+  /// إكمال بيانات الحساب (الاسم + الجنس + نوع الحساب) بعد تسجيل الدخول لأول مرة.
+  Future<bool> completeAccountSetup(
+    String accountType, {
+    String? name,
+    String? gender,
+  }) async {
     User? fb = _authService.currentUser;
     if (fb == null) {
       _errorMessage = 'لم يتم تسجيل الدخول';
@@ -344,15 +323,17 @@ class AuthProvider with ChangeNotifier {
       _errorMessage = null;
       notifyListeners();
 
-      String name = fb.displayName ?? fb.email ?? 'مستخدم';
+      String finalName = (name != null && name.trim().isNotEmpty)
+          ? name.trim()
+          : (fb.displayName ?? fb.email ?? 'مستخدم');
       String email = fb.email ?? '';
 
       UserModel newUser = UserModel.fromFirebaseUser(
         uid: fb.uid,
-        name: name,
+        name: finalName,
         email: email,
         accountType: accountType,
-      );
+      ).copyWith(gender: gender);
 
       if (accountType == 'student') {
         try {
@@ -373,12 +354,21 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('❌ completeGoogleRegistration error: $e');
+      debugPrint('❌ completeAccountSetup error: $e');
       _errorMessage = e.toString();
       _isLoading = false;
       notifyListeners();
       return false;
     }
+  }
+
+  // Backward compatibility with older callers
+  Future<bool> completeGoogleRegistration(
+    String accountType, {
+    String? name,
+    String? gender,
+  }) {
+    return completeAccountSetup(accountType, name: name, gender: gender);
   }
 
   // Sign out
@@ -398,12 +388,48 @@ class AuthProvider with ChangeNotifier {
 
       await _authService.signOut();
       _user = null;
+      _parentSelectedChildId = null;
       await _saveAuthState(false);
 
       _isLoading = false;
       notifyListeners();
     } catch (e) {
       _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Delete account from Firebase Auth + Firestore
+  Future<void> deleteAccount() async {
+    if (_user == null) {
+      throw 'المستخدم غير موجود';
+    }
+
+    final currentUser = _user!;
+    try {
+      _isLoading = true;
+      _errorMessage = null;
+      notifyListeners();
+
+      // Remove token first (best effort)
+      await _removeFCMToken(currentUser.uid);
+
+      // Delete Firestore profile and relations first while authenticated
+      await _userService.deleteUserProfileAndRelations(currentUser);
+
+      // Delete Firebase Authentication user
+      await _authService.deleteCurrentUser();
+
+      _userProfileSubscription?.cancel();
+      _userProfileSubscription = null;
+      _user = null;
+      _parentSelectedChildId = null;
+      await _saveAuthState(false);
+    } catch (e) {
+      _errorMessage = e.toString();
+      rethrow;
+    } finally {
       _isLoading = false;
       notifyListeners();
     }
@@ -562,6 +588,26 @@ class AuthProvider with ChangeNotifier {
   Future<void> _saveAuthState(bool isLoggedIn) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', isLoggedIn);
+  }
+
+  Future<void> _loadParentSelectedChildId(String parentUid) async {
+    final prefs = await SharedPreferences.getInstance();
+    _parentSelectedChildId = prefs.getString('parentSelectedChildId_$parentUid');
+  }
+
+  Future<void> setParentSelectedChildId(String? childUid) async {
+    final currentUser = _user;
+    if (currentUser == null || currentUser.accountType != 'parent') return;
+
+    _parentSelectedChildId = childUid;
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'parentSelectedChildId_${currentUser.uid}';
+    if (childUid == null || childUid.isEmpty) {
+      await prefs.remove(key);
+    } else {
+      await prefs.setString(key, childUid);
+    }
+    notifyListeners();
   }
 
   // Clear error message

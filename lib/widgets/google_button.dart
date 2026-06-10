@@ -37,23 +37,13 @@ class GoogleButton extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            // Google logo placeholder
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.grey[400]!),
-              ),
-              child: Center(
-                child: Text(
-                  'G',
-                  style: GoogleFonts.cairo(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blue[600],
-                  ),
-                ),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.asset(
+                'assets/images/google.png',
+                width: 24,
+                height: 24,
+                fit: BoxFit.cover,
               ),
             ),
           ],

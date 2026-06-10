@@ -16,6 +16,7 @@ class QRScannerScreen extends StatefulWidget {
 
 class _QRScannerScreenState extends State<QRScannerScreen> {
   MobileScannerController cameraController = MobileScannerController();
+  bool _handled = false;
 
   @override
   void dispose() {
@@ -49,11 +50,13 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
           MobileScanner(
             controller: cameraController,
             onDetect: (capture) {
+              if (_handled || !mounted) return;
               final List<Barcode> barcodes = capture.barcodes;
               for (final barcode in barcodes) {
                 if (barcode.rawValue != null) {
-                  final String code = barcode.rawValue!;
-                  // Stop scanning
+                  final String code = barcode.rawValue!.trim();
+                  if (code.isEmpty) break;
+                  _handled = true;
                   cameraController.stop();
                   widget.onCodeScanned(code);
                   Navigator.pop(context, code);
@@ -62,56 +65,45 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
               }
             },
           ),
-          // Overlay with instructions
+          // Center scan frame
+          Center(
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Colors.white,
+                  width: 2.5,
+                ),
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+          // Bottom instructions
           Positioned(
-            bottom: 0,
             left: 0,
             right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.8),
-                  ],
+            bottom: 30,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'ضع كود الطالب داخل الإطار',
+                  style: GoogleFonts.cairo(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 250,
-                    height: 250,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Colors.white,
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                const SizedBox(height: 8),
+                Text(
+                  'سيتم قراءة الكود تلقائياً',
+                  style: GoogleFonts.cairo(
+                    fontSize: 14,
+                    color: Colors.white.withValues(alpha: 0.85),
                   ),
-                  const SizedBox(height: 24),
-                  Text(
-                    'ضع كود الطالب داخل الإطار',
-                    style: GoogleFonts.cairo(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'سيتم قراءة الكود تلقائياً',
-                    style: GoogleFonts.cairo(
-                      fontSize: 14,
-                      color: Colors.white.withValues(alpha: 0.8),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],

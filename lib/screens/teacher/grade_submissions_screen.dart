@@ -22,6 +22,7 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
   final AssignmentService _assignmentService = AssignmentService();
   final UserService _userService = UserService();
   List<SubmissionModel> _submissions = [];
+  final Map<String, String> _studentNameById = {};
   bool _isLoading = true;
 
   @override
@@ -37,9 +38,23 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
 
     try {
       final submissions = await _assignmentService.getAssignmentSubmissions(widget.assignment.id);
+      final ids = submissions.map((s) => s.studentId).toSet();
+      final names = <String, String>{..._studentNameById};
+      for (final id in ids) {
+        if (names.containsKey(id)) continue;
+        try {
+          final u = await _userService.getUserProfile(id);
+          names[id] = (u?.name ?? '').trim().isNotEmpty ? u!.name : 'طالب';
+        } catch (_) {
+          names[id] = 'طالب';
+        }
+      }
       if (mounted) {
         setState(() {
           _submissions = submissions;
+          _studentNameById
+            ..clear()
+            ..addAll(names);
           _isLoading = false;
         });
       }
@@ -58,9 +73,14 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
     }
   }
 
+  String _displayStudentName(SubmissionModel submission) {
+    return _studentNameById[submission.studentId] ?? 'طالب';
+  }
+
   Future<void> _gradeSubmission(SubmissionModel submission) async {
     final TextEditingController gradeController = TextEditingController();
-    
+    final studentLabel = _displayStudentName(submission);
+
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -69,8 +89,8 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'كود الطالب: ${submission.studentCode}',
-              style: GoogleFonts.cairo(),
+              'الطالب: $studentLabel',
+              style: GoogleFonts.cairo(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
             TextField(
@@ -240,7 +260,7 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'كود الطالب: ${submission.studentCode}',
+                      _displayStudentName(submission),
                       style: GoogleFonts.cairo(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -318,6 +338,7 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
                 onPressed: () => _gradeSubmission(submission),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -328,6 +349,7 @@ class _GradeSubmissionsScreenState extends State<GradeSubmissionsScreen> {
                   style: GoogleFonts.cairo(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
                 ),
               ),

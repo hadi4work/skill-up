@@ -51,10 +51,10 @@ class TeacherProfileScreen extends StatelessWidget {
           children: [
             // Profile Header
             _buildProfileHeader(userName, userEmail),
-            
+
             // Settings Section
             _buildSettingsSection(context, authProvider),
-            
+
             const SizedBox(height: 24),
           ],
         ),
@@ -131,7 +131,10 @@ class TeacherProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildSettingsSection(BuildContext context, AuthProvider authProvider) {
+  Widget _buildSettingsSection(
+    BuildContext context,
+    AuthProvider authProvider,
+  ) {
     return Container(
       margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -178,11 +181,7 @@ class TeacherProfileScreen extends StatelessWidget {
             onTap: () {},
           ),
           const Divider(height: 1),
-          _buildSettingItem(
-            icon: Icons.language,
-            title: 'اللغة',
-            onTap: () {},
-          ),
+          _buildSettingItem(icon: Icons.language, title: 'اللغة', onTap: () {}),
           const Divider(height: 1),
           _buildSettingItem(
             icon: Icons.lock_outline,
@@ -204,6 +203,55 @@ class TeacherProfileScreen extends StatelessWidget {
           ),
           const Divider(height: 1),
           _buildSettingItem(
+            icon: Icons.delete_forever_outlined,
+            title: 'حذف الحساب',
+            textColor: Colors.red,
+            onTap: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text('حذف الحساب', style: GoogleFonts.cairo()),
+                  content: Text(
+                    'سيتم حذف الحساب نهائياً من النظام ولا يمكن التراجع. هل تريد المتابعة؟',
+                    style: GoogleFonts.cairo(),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text('إلغاء', style: GoogleFonts.cairo()),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text(
+                        'حذف نهائي',
+                        style: GoogleFonts.cairo(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm != true) return;
+
+              try {
+                await authProvider.deleteAccount();
+                if (!context.mounted) return;
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  (route) => false,
+                );
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(e.toString(), style: GoogleFonts.cairo()),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+          ),
+          const Divider(height: 1),
+          _buildSettingItem(
             icon: Icons.logout,
             title: 'تسجيل الخروج',
             textColor: Colors.red,
@@ -212,7 +260,10 @@ class TeacherProfileScreen extends StatelessWidget {
                 context: context,
                 builder: (context) => AlertDialog(
                   title: Text('تسجيل الخروج', style: GoogleFonts.cairo()),
-                  content: Text('هل أنت متأكد من تسجيل الخروج؟', style: GoogleFonts.cairo()),
+                  content: Text(
+                    'هل أنت متأكد من تسجيل الخروج؟',
+                    style: GoogleFonts.cairo(),
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
@@ -220,7 +271,10 @@ class TeacherProfileScreen extends StatelessWidget {
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: Text('تسجيل الخروج', style: GoogleFonts.cairo(color: Colors.red)),
+                      child: Text(
+                        'تسجيل الخروج',
+                        style: GoogleFonts.cairo(color: Colors.red),
+                      ),
                     ),
                   ],
                 ),
@@ -258,7 +312,11 @@ class TeacherProfileScreen extends StatelessWidget {
           color: textColor ?? const Color(0xFF111827),
         ),
       ),
-      trailing: Icon(Icons.arrow_back_ios, size: 16, color: textColor ?? const Color(0xFF6B7280)),
+      trailing: Icon(
+        Icons.arrow_back_ios,
+        size: 16,
+        color: textColor ?? const Color(0xFF6B7280),
+      ),
       onTap: onTap,
     );
   }

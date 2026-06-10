@@ -12,6 +12,7 @@ import 'services/push_notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PushNotificationService? pushNotificationService;
   try {
     await Firebase.initializeApp();
 
@@ -24,22 +25,25 @@ void main() async {
   }
   if (Platform.isAndroid) {
     try {
-      final pushNotificationService = PushNotificationService();
+      pushNotificationService = PushNotificationService();
       await pushNotificationService.initialize();
     } catch (e) {
       debugPrint('Push notification init error: $e');
     }
   }
-  runApp(const MyApp());
+  runApp(MyApp(pushNotificationService: pushNotificationService));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final PushNotificationService? pushNotificationService;
+
+  const MyApp({super.key, this.pushNotificationService});
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => AuthProvider(),
+      create: (_) =>
+          AuthProvider(pushNotificationService: pushNotificationService),
       child: MaterialApp(
         title: 'SkillUp AI',
         debugShowCheckedModeBanner: false,

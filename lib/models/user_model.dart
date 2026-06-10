@@ -5,6 +5,8 @@ class UserModel {
   final String accountType; // 'student', 'teacher', 'parent'
   final DateTime createdAt;
   final String? profileImage;
+  /// ذكر: male | أنثى: female (اختياري للحسابات القديمة)
+  final String? gender;
   
   // للطالب
   final String? studentCode;
@@ -27,6 +29,7 @@ class UserModel {
     required this.accountType,
     required this.createdAt,
     this.profileImage,
+    this.gender,
     this.studentCode,
     this.parentId,
     this.teacherId,
@@ -46,6 +49,7 @@ class UserModel {
       'accountType': accountType,
       'createdAt': createdAt.toIso8601String(),
       'profileImage': profileImage,
+      'gender': gender,
       'studentCode': studentCode,
       'parentId': parentId,
       'teacherId': teacherId,
@@ -68,6 +72,7 @@ class UserModel {
           ? DateTime.parse(map['createdAt'])
           : DateTime.now(),
       profileImage: map['profileImage'],
+      gender: map['gender'] as String?,
       studentCode: map['studentCode'],
       parentId: map['parentId'],
       teacherId: map['teacherId'],
@@ -104,6 +109,7 @@ class UserModel {
     String? name,
     String? email,
     String? profileImage,
+    String? gender,
     String? studentCode,
     String? parentId,
     String? teacherId,
@@ -120,6 +126,7 @@ class UserModel {
       accountType: accountType,
       createdAt: createdAt,
       profileImage: profileImage ?? this.profileImage,
+      gender: gender ?? this.gender,
       studentCode: studentCode ?? this.studentCode,
       parentId: parentId ?? this.parentId,
       teacherId: teacherId ?? this.teacherId,

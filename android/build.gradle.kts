@@ -15,6 +15,15 @@ allprojects {
     }
 }
 
+// mobile_scanner وغيره قد يثبّتون exifinterface:1.3.2 الذي قد يفشل التحميل؛ نفرض إصداراً متوفراً في Google Maven
+subprojects {
+    configurations.configureEach {
+        resolutionStrategy {
+            force("androidx.exifinterface:exifinterface:1.3.7")
+        }
+    }
+}
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")

@@ -5,10 +5,10 @@ import '../widgets/skillup_logo.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/google_button.dart';
-import '../widgets/account_type_card.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
 import 'email_verification_screen.dart';
+import 'auth_wrapper.dart';
 
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
@@ -19,17 +19,14 @@ class SignUpScreen extends StatefulWidget {
 
 class _SignUpScreenState extends State<SignUpScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
   bool _agreeToTerms = false;
-  AccountType? _selectedAccountType;
 
   @override
   void dispose() {
-    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -38,14 +35,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   void _handleSignUp() async {
     if (_formKey.currentState!.validate()) {
-      if (_selectedAccountType == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('يرجى اختيار نوع الحساب', style: GoogleFonts.cairo()),
-          ),
-        );
-        return;
-      }
       if (!_agreeToTerms) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -64,18 +53,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
-      // Convert AccountType to string
-      String accountType = _selectedAccountType == AccountType.student
-          ? 'student'
-          : _selectedAccountType == AccountType.teacher
-          ? 'teacher'
-          : 'parent';
-
       bool success = await authProvider.signUp(
-        name: _nameController.text.trim(),
         email: _emailController.text.trim(),
         password: _passwordController.text,
-        accountType: accountType,
       );
 
       if (!success && authProvider.errorMessage != null) {
@@ -139,6 +119,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
           ),
         );
       }
+      return;
+    }
+
+    if (success && mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthWrapper()),
+        (route) => false,
+      );
     }
   }
 
@@ -156,7 +144,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
               children: [
                 const SizedBox(height: 20),
                 // Logo
-                const SkillUpLogo(logoSize: 70, fontSize: 22),
+                const SkillUpLogo(logoSize: 88, fontSize: 22, showBrandName: false),
                 const SizedBox(height: 24),
                 // Title
                 Text(
@@ -180,20 +168,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                // Full name field
-                CustomTextField(
-                  label: 'الاسم الكامل',
-                  placeholder: 'أدخل اسمك الكامل',
-                  prefixIcon: Icons.person_outline,
-                  controller: _nameController,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'يرجى إدخال الاسم الكامل';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 20),
                 // Email field
                 CustomTextField(
                   label: 'البريد الالكتروني',
@@ -258,55 +232,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     }
                     return null;
                   },
-                ),
-                const SizedBox(height: 32),
-                // Account type selection
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    'أختر نوع الحساب',
-                    style: GoogleFonts.cairo(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    AccountTypeCard(
-                      type: AccountType.parent,
-                      isSelected: _selectedAccountType == AccountType.parent,
-                      onTap: () {
-                        setState(() {
-                          _selectedAccountType = AccountType.parent;
-                        });
-                      },
-                      imagePath: 'assets/images/parents.png',
-                    ),
-                    AccountTypeCard(
-                      type: AccountType.teacher,
-                      isSelected: _selectedAccountType == AccountType.teacher,
-                      onTap: () {
-                        setState(() {
-                          _selectedAccountType = AccountType.teacher;
-                        });
-                      },
-                      imagePath: 'assets/images/teacher.png',
-                    ),
-                    AccountTypeCard(
-                      type: AccountType.student,
-                      isSelected: _selectedAccountType == AccountType.student,
-                      onTap: () {
-                        setState(() {
-                          _selectedAccountType = AccountType.student;
-                        });
-                      },
-                      imagePath: 'assets/images/student.png',
-                    ),
-                  ],
                 ),
                 const SizedBox(height: 32),
                 // Terms and conditions checkbox

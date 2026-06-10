@@ -153,7 +153,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               children: [
                 const SizedBox(height: 20),
                 // Logo
-                const SkillUpLogo(logoSize: 80, fontSize: 24),
+                const SkillUpLogo(logoSize: 88, fontSize: 24, showBrandName: false),
                 const SizedBox(height: 32),
                 // Title
                 Text(

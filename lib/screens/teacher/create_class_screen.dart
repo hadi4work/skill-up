@@ -787,12 +787,12 @@ class _CreateClassScreenState extends State<CreateClassScreen>
                       const SizedBox(width: 8),
                       IconButton(
                         onPressed: () async {
+                          // الماسح يستدعي onCodeScanned ثم Navigator.pop بنفسه؛ لا تُغلق مساراً ثانياً هنا.
                           final code = await Navigator.push<String>(
                             context,
                             MaterialPageRoute(
                               builder: (_) => QRScannerScreen(
-                                onCodeScanned: (c) =>
-                                    Navigator.pop(context, c),
+                                onCodeScanned: (_) {},
                               ),
                             ),
                           );
